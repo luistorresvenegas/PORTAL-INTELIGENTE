@@ -27,7 +27,7 @@ from psycopg.rows import dict_row
 # 1. CONFIGURACIÓN
 # ======================================================================
 
-VERSION = "0.16.3"
+VERSION = "0.18.9.0.3-R1.4"
 
 
 def obtener_database_url():
@@ -380,6 +380,22 @@ def inicializar_db():
                 idx_portal_interacciones_user
 
             ON portal.interacciones(user_id)
+            """
+        )
+
+    # ------------------------------------------------------------------
+    # RECUPERACION_A_PERFIL_CONFIRMADO_V01880R1
+    # ------------------------------------------------------------------
+
+    with conectar_db() as conexion:
+
+        conexion.execute(
+            """
+            ALTER TABLE portal.perfiles
+            ADD COLUMN IF NOT EXISTS perfil_confirmado_json
+                JSONB
+                NOT NULL
+                DEFAULT '{}'::jsonb
             """
         )
 
@@ -2688,7 +2704,7 @@ def extraer_importancia(
     return 3
 
 
-def extraer_habilidades_oferta(
+def extraer_habilidades_oferta_base_v018842(
     texto
 ):
 
@@ -2744,6 +2760,123 @@ def extraer_habilidades_oferta(
 
 
     return resultado
+
+def extraer_habilidades_oferta(
+    texto
+):
+
+    habilidades = extraer_habilidades_oferta_base_v018842(
+        texto
+    )
+
+
+    if not isinstance(
+        habilidades,
+        dict
+    ):
+
+        return habilidades
+
+
+    texto_total = str(
+        texto
+        or
+        ""
+    )
+
+
+    oraciones = separar_oraciones(
+        texto_total
+    )
+
+
+    patrones_nivel = [
+
+        "basico",
+        "básico",
+
+        "inicial",
+
+        "intermedio",
+
+        "avanzado",
+
+        "experto",
+
+        "senior",
+        "sénior",
+
+        "junior",
+        "júnior"
+    ]
+
+
+    for nombre_habilidad, datos in habilidades.items():
+
+        if not isinstance(
+            datos,
+            dict
+        ):
+
+            continue
+
+
+        nombre_norm = normalizar(
+            nombre_habilidad
+        )
+
+
+        nivel_explicito = False
+
+        texto_origen = ""
+
+
+        for oracion in oraciones:
+
+            oracion_norm = normalizar(
+                oracion
+            )
+
+
+            if (
+                nombre_norm
+                and
+                nombre_norm
+                in oracion_norm
+            ):
+
+                texto_origen = oracion
+
+
+                if any(
+
+                    normalizar(
+                        patron
+                    )
+                    in oracion_norm
+
+                    for patron
+                    in patrones_nivel
+                ):
+
+                    nivel_explicito = True
+
+                    break
+
+
+        datos[
+            "nivel_explicito"
+        ] = nivel_explicito
+
+
+        if texto_origen:
+
+            datos[
+                "texto_origen"
+            ] = texto_origen
+
+
+    return habilidades
 
 
 def parsear_oferta(
@@ -3587,17 +3720,963 @@ def aprender_comportamiento(
 # 20. PERFIL
 # ======================================================================
 
-def construir_perfil(
-    cv,
-    preferencias,
-    historial
+# ======================================================================
+# V0.18.8.0-R1
+# PERFIL CONFIRMADO + EXPERIENCIAS ESTRUCTURADAS
+# ======================================================================
+
+
+def _json_dict_v01880(
+    valor
 ):
+
+    if valor is None:
+
+        return {}
+
+
+    if isinstance(
+        valor,
+        dict
+    ):
+
+        return deepcopy(
+            valor
+        )
+
+
+    if isinstance(
+        valor,
+        str
+    ):
+
+        try:
+
+            convertido = json.loads(
+                valor
+            )
+
+
+            if isinstance(
+                convertido,
+                dict
+            ):
+
+                return convertido
+
+
+        except Exception:
+
+            pass
+
+
+    return {}
+
+
+def _texto_limpio_v01880(
+    valor
+):
+
+    return str(
+        valor
+        or
+        ""
+    ).strip()
+
+
+def _numero_no_negativo_v01880(
+    valor,
+    default=0.0
+):
+
+    try:
+
+        numero = float(
+            valor
+        )
+
+
+        return max(
+            0.0,
+            numero
+        )
+
+
+    except Exception:
+
+        return float(
+            default
+        )
+
+
+def normalizar_experiencia_v01880(
+    experiencia
+):
+
+    if not isinstance(
+        experiencia,
+        dict
+    ):
+
+        return None
+
+
+    # ------------------------------------------------------------------
+    # CARGO
+    #
+    # Transparencia:
+    #
+    #   confirmado por usuario > valor genérico > detectado automáticamente
+    # ------------------------------------------------------------------
+
+    cargo = _texto_limpio_v01880(
+        experiencia.get(
+            "cargo_confirmado"
+        )
+        or
+        experiencia.get(
+            "cargo"
+        )
+        or
+        experiencia.get(
+            "puesto"
+        )
+        or
+        experiencia.get(
+            "cargo_nombre"
+        )
+        or
+        experiencia.get(
+            "nombre_cargo"
+        )
+        or
+        experiencia.get(
+            "cargo_detectado"
+        )
+    )
+
+
+    empresa = _texto_limpio_v01880(
+        experiencia.get(
+            "empresa"
+        )
+        or
+        experiencia.get(
+            "organizacion"
+        )
+        or
+        experiencia.get(
+            "organización"
+        )
+        or
+        experiencia.get(
+            "empleador"
+        )
+    )
+
+
+    area = _texto_limpio_v01880(
+        experiencia.get(
+            "area"
+        )
+        or
+        experiencia.get(
+            "área"
+        )
+        or
+        experiencia.get(
+            "sector"
+        )
+    )
+
+
+    # ------------------------------------------------------------------
+    # FUNCIONES
+    # ------------------------------------------------------------------
+
+    funciones = (
+        experiencia.get(
+            "funciones"
+        )
+        or
+        experiencia.get(
+            "funciones_principales"
+        )
+        or
+        experiencia.get(
+            "responsabilidades"
+        )
+        or
+        experiencia.get(
+            "tareas"
+        )
+        or
+        []
+    )
+
+
+    if isinstance(
+        funciones,
+        str
+    ):
+
+        # --------------------------------------------------------------
+        # El registro histórico puede venir como:
+        #
+        # "Análisis de KPI, reportería, Power BI, forecast..."
+        #
+        # Lo transformamos en elementos independientes cuando existen
+        # separadores claros.
+        # --------------------------------------------------------------
+
+        funciones = [
+
+            parte.strip()
+
+            for parte
+            in re.split(
+                r"[,;\n•]+",
+                funciones
+            )
+
+            if parte.strip()
+        ]
+
+
+    elif isinstance(
+        funciones,
+        list
+    ):
+
+        funciones = [
+
+            _texto_limpio_v01880(
+                item
+            )
+
+            for item
+            in funciones
+
+            if _texto_limpio_v01880(
+                item
+            )
+        ]
+
+
+    else:
+
+        funciones = []
+
+
+    # ------------------------------------------------------------------
+    # HABILIDADES
+    # ------------------------------------------------------------------
+
+    habilidades = (
+        experiencia.get(
+            "habilidades"
+        )
+        or
+        experiencia.get(
+            "herramientas"
+        )
+        or
+        experiencia.get(
+            "tecnologias"
+        )
+        or
+        experiencia.get(
+            "tecnologías"
+        )
+        or
+        []
+    )
+
+
+    if isinstance(
+        habilidades,
+        str
+    ):
+
+        habilidades = [
+
+            parte.strip()
+
+            for parte
+            in re.split(
+                r"[,;\n]+",
+                habilidades
+            )
+
+            if parte.strip()
+        ]
+
+
+    elif isinstance(
+        habilidades,
+        list
+    ):
+
+        habilidades = [
+
+            _texto_limpio_v01880(
+                item
+            )
+
+            for item
+            in habilidades
+
+            if _texto_limpio_v01880(
+                item
+            )
+        ]
+
+
+    else:
+
+        habilidades = []
+
+
+    # ------------------------------------------------------------------
+    # DURACIÓN
+    #
+    # Compatibilidad histórica:
+    #
+    #   duracion_anos   ← campo REAL persistido
+    #
+    # además de:
+    #
+    #   años
+    #   anios
+    #   anos
+    #   duracion_anios
+    # ------------------------------------------------------------------
+
+    valor_años = None
+
+
+    for clave in [
+
+        "años",
+
+        "anios",
+
+        "anos",
+
+        "duracion_anos",
+
+        "duracion_anios",
+
+        "duración_años",
+
+        "experiencia_anios",
+
+        "experiencia_años"
+
+    ]:
+
+        if experiencia.get(
+            clave
+        ) not in [
+            None,
+            ""
+        ]:
+
+            valor_años = experiencia.get(
+                clave
+            )
+
+            break
+
+
+    # --------------------------------------------------------------
+    # Puede venir como:
+    #
+    #   5
+    #   5.0
+    #   "5"
+    #   "5 años"
+    # --------------------------------------------------------------
+
+    if isinstance(
+        valor_años,
+        str
+    ):
+
+        match = re.search(
+            r"\d+(?:[.,]\d+)?",
+            valor_años
+        )
+
+
+        if match:
+
+            valor_años = match.group(
+                0
+            ).replace(
+                ",",
+                "."
+            )
+
+
+    años = _numero_no_negativo_v01880(
+        valor_años,
+        0
+    )
+
+
+    actual = bool(
+        experiencia.get(
+            "actual",
+            False
+        )
+    )
+
+
+    desde = _texto_limpio_v01880(
+        experiencia.get(
+            "desde"
+        )
+        or
+        experiencia.get(
+            "fecha_inicio"
+        )
+    )
+
+
+    hasta = _texto_limpio_v01880(
+        experiencia.get(
+            "hasta"
+        )
+        or
+        experiencia.get(
+            "fecha_fin"
+        )
+    )
+
+
+    if not any(
+        [
+            cargo,
+            empresa,
+            area,
+            funciones,
+            habilidades,
+            años
+        ]
+    ):
+
+        return None
+
 
     return {
 
+        "cargo":
+            cargo,
+
+        "empresa":
+            empresa,
+
+        "area":
+            area,
+
+        "años":
+            años,
+
+        "funciones":
+            funciones,
+
+        "habilidades":
+            habilidades,
+
+        "actual":
+            actual,
+
+        "desde":
+            desde,
+
+        "hasta":
+            hasta
+    }
+
+
+def normalizar_experiencias_v01880(
+    experiencias
+):
+
+    if not isinstance(
+        experiencias,
+        list
+    ):
+
+        return []
+
+
+    resultado = []
+
+
+    for experiencia in experiencias:
+
+        normalizada = normalizar_experiencia_v01880(
+            experiencia
+        )
+
+
+        if normalizada:
+
+            resultado.append(
+                normalizada
+            )
+
+
+    return resultado
+
+
+def normalizar_perfil_confirmado_v01880(
+    perfil_confirmado
+):
+
+    perfil_confirmado = _json_dict_v01880(
+        perfil_confirmado
+    )
+
+
+    # ------------------------------------------------------------------
+    # COMPATIBILIDAD HISTÓRICA
+    #
+    # V0.18.8.0 original llegó a persistir este campo como:
+    #
+    #     experiencias_laborales
+    #
+    # Las reconstrucciones posteriores usaban:
+    #
+    #     experiencias
+    #
+    # Ambas formas deben funcionar.
+    # ------------------------------------------------------------------
+
+    experiencias_raw = (
+        perfil_confirmado.get(
+            "experiencias"
+        )
+        or
+        perfil_confirmado.get(
+            "experiencias_laborales"
+        )
+        or
+        perfil_confirmado.get(
+            "experiencia_laboral"
+        )
+        or
+        []
+    )
+
+
+    experiencias = normalizar_experiencias_v01880(
+        experiencias_raw
+    )
+
+
+    habilidades = perfil_confirmado.get(
+        "habilidades",
+        {}
+    )
+
+
+    if not isinstance(
+        habilidades,
+        dict
+    ):
+
+        habilidades = {}
+
+
+    experiencia_total_raw = perfil_confirmado.get(
+        "experiencia_total"
+    )
+
+
+    experiencia_total = None
+
+
+    if experiencia_total_raw not in [
+        None,
+        ""
+    ]:
+
+        if isinstance(
+            experiencia_total_raw,
+            str
+        ):
+
+            match = re.search(
+                r"\d+(?:[.,]\d+)?",
+                experiencia_total_raw
+            )
+
+
+            if match:
+
+                experiencia_total_raw = match.group(
+                    0
+                ).replace(
+                    ",",
+                    "."
+                )
+
+
+        experiencia_total = _numero_no_negativo_v01880(
+            experiencia_total_raw,
+            0
+        )
+
+
+    salida = {
+
+        "nombre":
+            _texto_limpio_v01880(
+                perfil_confirmado.get(
+                    "nombre"
+                )
+            ),
+
+        "profesion":
+            _texto_limpio_v01880(
+                perfil_confirmado.get(
+                    "profesion"
+                )
+            ),
+
+        "ciudad":
+            _texto_limpio_v01880(
+                perfil_confirmado.get(
+                    "ciudad"
+                )
+            ),
+
+        "experiencia_total":
+            experiencia_total,
+
+        "habilidades":
+            deepcopy(
+                habilidades
+            ),
+
+        "experiencias":
+            experiencias,
+
+        "confirmado_por_usuario":
+            bool(
+                perfil_confirmado.get(
+                    "confirmado_por_usuario",
+                    False
+                )
+            )
+    }
+
+
+    return salida
+
+
+def guardar_perfil_confirmado_v01880(
+    user_id,
+    perfil_confirmado
+):
+
+    perfil_confirmado = normalizar_perfil_confirmado_v01880(
+        perfil_confirmado
+    )
+
+
+    with conectar_db() as conexion:
+
+        conexion.execute(
+            """
+            INSERT INTO portal.perfiles (
+                user_id,
+                perfil_confirmado_json
+            )
+
+            VALUES (
+                %s,
+                %s::jsonb
+            )
+
+            ON CONFLICT(user_id)
+
+            DO UPDATE SET
+
+                perfil_confirmado_json =
+                    EXCLUDED.perfil_confirmado_json,
+
+                actualizado_en =
+                    NOW()
+            """,
+            (
+                user_id,
+                json.dumps(
+                    perfil_confirmado,
+                    ensure_ascii=False
+                )
+            )
+        )
+
+
+def cargar_perfil_confirmado_v01880(
+    user_id
+):
+
+    with conectar_db() as conexion:
+
+        fila = conexion.execute(
+            """
+            SELECT
+                perfil_confirmado_json
+
+            FROM portal.perfiles
+
+            WHERE user_id = %s
+            """,
+            (
+                user_id,
+            )
+        ).fetchone()
+
+
+    if not fila:
+
+        return normalizar_perfil_confirmado_v01880(
+            {}
+        )
+
+
+    return normalizar_perfil_confirmado_v01880(
+        fila[
+            "perfil_confirmado_json"
+        ]
+    )
+
+
+def fusionar_cv_confirmado_v01880(
+    cv_detectado,
+    perfil_confirmado
+):
+
+    cv_detectado = deepcopy(
+        cv_detectado
+        if isinstance(
+            cv_detectado,
+            dict
+        )
+        else {}
+    )
+
+
+    perfil_confirmado = normalizar_perfil_confirmado_v01880(
+        perfil_confirmado
+    )
+
+
+    efectivo = deepcopy(
+        cv_detectado
+    )
+
+
+    # ------------------------------------------------------------------
+    # Los campos confirmados sólo reemplazan información cuando el
+    # usuario realmente entregó un valor.
+    # ------------------------------------------------------------------
+
+    for campo in [
+        "nombre",
+        "profesion",
+        "ciudad"
+    ]:
+
+        valor = perfil_confirmado.get(
+            campo
+        )
+
+
+        if valor:
+
+            efectivo[
+                campo
+            ] = valor
+
+
+    experiencia_total = perfil_confirmado.get(
+        "experiencia_total"
+    )
+
+
+    if experiencia_total is not None:
+
+        efectivo[
+            "experiencia"
+        ] = experiencia_total
+
+
+    habilidades_confirmadas = perfil_confirmado.get(
+        "habilidades",
+        {}
+    )
+
+
+    if habilidades_confirmadas:
+
+        habilidades_detectadas = deepcopy(
+            efectivo.get(
+                "habilidades",
+                {}
+            )
+        )
+
+
+        if isinstance(
+            habilidades_detectadas,
+            dict
+        ):
+
+            habilidades_detectadas.update(
+                deepcopy(
+                    habilidades_confirmadas
+                )
+            )
+
+
+            efectivo[
+                "habilidades"
+            ] = habilidades_detectadas
+
+
+    return efectivo
+
+
+def resumen_experiencias_v01880(
+    experiencias
+):
+
+    experiencias = normalizar_experiencias_v01880(
+        experiencias
+    )
+
+
+    return {
+
+        "cantidad":
+            len(
+                experiencias
+            ),
+
+        "años_declarados":
+            sum(
+                float(
+                    experiencia.get(
+                        "años",
+                        0
+                    )
+                    or
+                    0
+                )
+                for experiencia
+                in experiencias
+            ),
+
+        "cargos":
+            [
+                experiencia[
+                    "cargo"
+                ]
+                for experiencia
+                in experiencias
+                if experiencia.get(
+                    "cargo"
+                )
+            ],
+
+        "areas":
+            list(
+                dict.fromkeys(
+                    experiencia[
+                        "area"
+                    ]
+                    for experiencia
+                    in experiencias
+                    if experiencia.get(
+                        "area"
+                    )
+                )
+            )
+    }
+
+def construir_perfil(
+    cv,
+    preferencias,
+    historial,
+    perfil_confirmado=None
+):
+
+    cv_detectado = procesar_cv(
+        cv
+    )
+
+
+    perfil_confirmado = normalizar_perfil_confirmado_v01880(
+        perfil_confirmado
+        or
+        {}
+    )
+
+
+    cv_efectivo = fusionar_cv_confirmado_v01880(
+        cv_detectado,
+        perfil_confirmado
+    )
+
+
+    experiencias = normalizar_experiencias_v01880(
+        perfil_confirmado.get(
+            "experiencias",
+            []
+        )
+    )
+
+
+    return {
+
+        # --------------------------------------------------------------
+        # Compatibilidad histórica.
+        #
+        # Todo el motor antiguo sigue consumiendo perfil["cv"].
+        # --------------------------------------------------------------
+
         "cv":
-            procesar_cv(
-                cv
+            cv_efectivo,
+
+        # --------------------------------------------------------------
+        # Transparencia:
+        # diferenciamos lo detectado de lo corregido/confirmado.
+        # --------------------------------------------------------------
+
+        "cv_detectado":
+            deepcopy(
+                cv_detectado
+            ),
+
+        "perfil_confirmado":
+            deepcopy(
+                perfil_confirmado
+            ),
+
+        "experiencias":
+            deepcopy(
+                experiencias
+            ),
+
+        "experiencias_resumen":
+            resumen_experiencias_v01880(
+                experiencias
             ),
 
         "preferencias":
@@ -3612,7 +4691,7 @@ def construir_perfil(
     }
 
 
-def materializar_candidato(
+def materializar_candidato_base_v01880r1(
     perfil
 ):
 
@@ -3681,6 +4760,62 @@ def materializar_candidato(
             ]
         ]
     }
+
+def materializar_candidato(
+    perfil
+):
+
+    candidato = materializar_candidato_base_v01880r1(
+        perfil
+    )
+
+
+    perfil_confirmado = perfil.get(
+        "perfil_confirmado",
+        {}
+    )
+
+
+    experiencias = normalizar_experiencias_v01880(
+        perfil.get(
+            "experiencias",
+            []
+        )
+    )
+
+
+    candidato[
+        "perfil_confirmado"
+    ] = deepcopy(
+        perfil_confirmado
+    )
+
+
+    candidato[
+        "experiencias"
+    ] = deepcopy(
+        experiencias
+    )
+
+
+    candidato[
+        "experiencias_resumen"
+    ] = resumen_experiencias_v01880(
+        experiencias
+    )
+
+
+    candidato[
+        "cv_detectado"
+    ] = deepcopy(
+        perfil.get(
+            "cv_detectado",
+            {}
+        )
+    )
+
+
+    return candidato
 
 
 # ======================================================================
@@ -4046,7 +5181,2680 @@ def aplicar_guardrails(
     return score
 
 
-def evaluar_oferta(
+# ======================================================================
+# V0.18.8.1 / V0.18.8.2 - RECUPERACIÓN B
+# EXPERIENCIA FUNCIONAL Y CONTEXTUAL
+# ======================================================================
+
+
+PESOS_EXPERIENCIA_CONTEXTUAL_V01882 = {
+
+    "DIRECTA":
+        1.00,
+
+    "FUNCIONAL_RELEVANTE":
+        0.85,
+
+    "RELACIONADA":
+        0.65,
+
+    "TRANSFERIBLE_ALTO_VALOR":
+        0.45,
+
+    "TRANSFERIBLE":
+        0.20
+}
+
+
+# ----------------------------------------------------------------------
+# DOMINIOS PROFESIONALES
+# ----------------------------------------------------------------------
+
+DOMINIOS_CARGO_V01881 = {
+
+    "finanzas": {
+
+        "cargo": [
+            "financiero",
+            "financiera",
+            "finanzas",
+            "contable",
+            "contabilidad",
+            "tesoreria",
+            "tesorería",
+            "control gestion",
+            "control de gestion",
+            "control de gestión",
+            "presupuesto"
+        ],
+
+        "funciones": [
+            "forecast",
+            "presupuesto",
+            "presupuestos",
+            "flujo de caja",
+            "cash flow",
+            "analisis financiero",
+            "análisis financiero",
+            "indicadores financieros",
+            "kpi",
+            "reporteria",
+            "reportería",
+            "reportes",
+            "excel",
+            "power bi",
+            "control de gestion",
+            "control de gestión",
+            "proyecciones",
+            "rentabilidad",
+            "margen",
+            "costos",
+            "coste",
+            "conciliacion",
+            "conciliación"
+        ]
+    },
+
+
+    "datos": {
+
+        "cargo": [
+            "analista de datos",
+            "data analyst",
+            "data scientist",
+            "cientifico de datos",
+            "científico de datos",
+            "business intelligence",
+            "bi analyst",
+            "analista bi",
+            "ingeniero de datos",
+            "data engineer"
+        ],
+
+        # --------------------------------------------------------------
+        # Aquí somos deliberadamente más estrictos.
+        #
+        # KPI/reportería/Excel/Power BI por sí solos NO convierten una
+        # trayectoria comercial en experiencia funcional directa de Data.
+        #
+        # Eso reproduce nuestro caso histórico:
+        # ventas -> Analista de Datos = TRANSFERIBLE_ALTO_VALOR.
+        # --------------------------------------------------------------
+
+        "funciones": [
+            "sql",
+            "python",
+            "etl",
+            "base de datos",
+            "bases de datos",
+            "data warehouse",
+            "modelamiento de datos",
+            "modelo de datos",
+            "machine learning",
+            "visualizacion de datos",
+            "visualización de datos",
+            "limpieza de datos",
+            "transformacion de datos",
+            "transformación de datos",
+            "power query",
+            "dax"
+        ]
+    },
+
+
+    "comercial": {
+
+        "cargo": [
+            "ventas",
+            "vendedor",
+            "ejecutivo comercial",
+            "ejecutivo de ventas",
+            "account manager",
+            "key account",
+            "kAM",
+            "business development",
+            "desarrollo de negocios",
+            "comercial"
+        ],
+
+        "funciones": [
+            "ventas",
+            "venta b2b",
+            "ventas b2b",
+            "clientes",
+            "cartera",
+            "negociacion",
+            "negociación",
+            "prospeccion",
+            "prospección",
+            "crm",
+            "pipeline",
+            "forecast comercial",
+            "cumplimiento de metas",
+            "kpi comercial"
+        ]
+    },
+
+
+    "rrhh": {
+
+        "cargo": [
+            "recursos humanos",
+            "rrhh",
+            "people",
+            "talento",
+            "reclutamiento",
+            "seleccion",
+            "selección",
+            "compensaciones"
+        ],
+
+        "funciones": [
+            "reclutamiento",
+            "seleccion",
+            "selección",
+            "entrevistas",
+            "contratacion",
+            "contratación",
+            "remuneraciones",
+            "capacitacion",
+            "capacitación",
+            "desarrollo organizacional",
+            "clima laboral",
+            "personas"
+        ]
+    },
+
+
+    "administracion": {
+
+        "cargo": [
+            "administrativo",
+            "administracion",
+            "administración",
+            "asistente administrativo",
+            "back office",
+            "operaciones"
+        ],
+
+        "funciones": [
+            "gestion documental",
+            "gestión documental",
+            "coordinacion",
+            "coordinación",
+            "facturacion",
+            "facturación",
+            "ordenes de compra",
+            "órdenes de compra",
+            "proveedores",
+            "reporteria",
+            "reportería",
+            "control administrativo"
+        ]
+    },
+
+
+    "tecnologia": {
+
+        "cargo": [
+            "desarrollador",
+            "developer",
+            "backend",
+            "frontend",
+            "software",
+            "programador",
+            "ingeniero de software",
+            "devops"
+        ],
+
+        "funciones": [
+            "desarrollo",
+            "programacion",
+            "programación",
+            "api",
+            "backend",
+            "frontend",
+            "git",
+            "docker",
+            "cloud",
+            "testing",
+            "microservicios"
+        ]
+    }
+}
+
+
+TRANSFERIBLES_ALTO_VALOR_V01881 = [
+
+    "analisis",
+    "análisis",
+
+    "analisis de datos",
+    "análisis de datos",
+
+    "kpi",
+
+    "indicadores",
+
+    "reporteria",
+    "reportería",
+
+    "reportes",
+
+    "forecast",
+
+    "excel",
+
+    "power bi",
+
+    "powerbi",
+
+    "dashboard",
+
+    "tablero",
+
+    "visualizacion",
+    "visualización",
+
+    "toma de decisiones",
+
+    "proyecciones",
+
+    "seguimiento de resultados"
+]
+
+
+TRANSFERIBLES_GENERALES_V01881 = [
+
+    "clientes",
+
+    "coordinacion",
+    "coordinación",
+
+    "gestion",
+    "gestión",
+
+    "planificacion",
+    "planificación",
+
+    "comunicacion",
+    "comunicación",
+
+    "negociacion",
+    "negociación",
+
+    "organizacion",
+    "organización",
+
+    "liderazgo",
+
+    "trabajo en equipo",
+
+    "cumplimiento de metas"
+]
+
+
+def _normalizar_exp_v01881(
+    valor
+):
+
+    texto = str(
+        valor
+        or
+        ""
+    ).lower()
+
+
+    texto = normalizar(
+        texto
+    )
+
+
+    texto = re.sub(
+        r"\s+",
+        " ",
+        texto
+    )
+
+
+    return texto.strip()
+
+
+def _texto_experiencia_v01881(
+    experiencia
+):
+
+    if not isinstance(
+        experiencia,
+        dict
+    ):
+
+        return ""
+
+
+    partes = [
+
+        experiencia.get(
+            "cargo",
+            ""
+        ),
+
+        experiencia.get(
+            "area",
+            ""
+        ),
+
+        " ".join(
+            experiencia.get(
+                "funciones",
+                []
+            )
+            if isinstance(
+                experiencia.get(
+                    "funciones"
+                ),
+                list
+            )
+            else [
+                str(
+                    experiencia.get(
+                        "funciones",
+                        ""
+                    )
+                )
+            ]
+        ),
+
+        " ".join(
+            experiencia.get(
+                "habilidades",
+                []
+            )
+            if isinstance(
+                experiencia.get(
+                    "habilidades"
+                ),
+                list
+            )
+            else [
+                str(
+                    experiencia.get(
+                        "habilidades",
+                        ""
+                    )
+                )
+            ]
+        )
+    ]
+
+
+    return _normalizar_exp_v01881(
+        " ".join(
+            str(
+                parte
+            )
+            for parte
+            in partes
+        )
+    )
+
+
+def _contiene_alguno_v01881(
+    texto,
+    palabras
+):
+
+    texto = _normalizar_exp_v01881(
+        texto
+    )
+
+
+    return any(
+        _normalizar_exp_v01881(
+            palabra
+        )
+        in texto
+        for palabra
+        in palabras
+    )
+
+
+def _cantidad_coincidencias_v01881(
+    texto,
+    palabras
+):
+
+    texto = _normalizar_exp_v01881(
+        texto
+    )
+
+
+    encontrados = set()
+
+
+    for palabra in palabras:
+
+        canon = _normalizar_exp_v01881(
+            palabra
+        )
+
+
+        if canon and canon in texto:
+
+            encontrados.add(
+                canon
+            )
+
+
+    return len(
+        encontrados
+    )
+
+
+def detectar_dominio_cargo_v01881(
+    cargo
+):
+
+    cargo_norm = _normalizar_exp_v01881(
+        cargo
+    )
+
+
+    mejor_dominio = None
+
+    mejor_score = 0
+
+
+    for dominio, reglas in DOMINIOS_CARGO_V01881.items():
+
+        score = _cantidad_coincidencias_v01881(
+            cargo_norm,
+            reglas[
+                "cargo"
+            ]
+        )
+
+
+        if score > mejor_score:
+
+            mejor_dominio = dominio
+
+            mejor_score = score
+
+
+    return mejor_dominio
+
+
+def _score_similitud_cargo_seguro_v01881(
+    cargo_experiencia,
+    cargo_oferta
+):
+
+    try:
+
+        return float(
+            similitud_cargo(
+                cargo_oferta,
+                cargo_experiencia
+            )
+        )
+
+
+    except Exception:
+
+        return 0.0
+
+
+def clasificar_experiencia_v01881(
+    experiencia,
+    oferta
+):
+
+    experiencia = normalizar_experiencia_v01880(
+        experiencia
+    )
+
+
+    if not experiencia:
+
+        return {
+
+            "clasificacion":
+                "SIN_EVIDENCIA",
+
+            "peso":
+                0.0,
+
+            "razon":
+                "No existe suficiente información de esta experiencia.",
+
+            "cargo_similitud":
+                0.0,
+
+            "dominio_objetivo":
+                None
+        }
+
+
+    cargo_exp = experiencia.get(
+        "cargo",
+        ""
+    )
+
+
+    cargo_objetivo = (
+        oferta.get(
+            "cargo",
+            ""
+        )
+        if isinstance(
+            oferta,
+            dict
+        )
+        else ""
+    )
+
+
+    texto_exp = _texto_experiencia_v01881(
+        experiencia
+    )
+
+
+    similitud = _score_similitud_cargo_seguro_v01881(
+        cargo_exp,
+        cargo_objetivo
+    )
+
+
+    dominio = detectar_dominio_cargo_v01881(
+        cargo_objetivo
+    )
+
+
+    # ------------------------------------------------------------------
+    # 1. DIRECTA
+    # ------------------------------------------------------------------
+
+    if similitud >= 70:
+
+        return {
+
+            "clasificacion":
+                "DIRECTA",
+
+            "peso":
+                PESOS_EXPERIENCIA_CONTEXTUAL_V01882[
+                    "DIRECTA"
+                ],
+
+            "razon":
+                (
+                    "El cargo de la experiencia está directamente "
+                    "alineado con el cargo de la oferta."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_objetivo":
+                dominio
+        }
+
+
+    # ------------------------------------------------------------------
+    # 2. FUNCIONAL_RELEVANTE
+    #
+    # El nombre del cargo puede ser distinto, pero las funciones tienen
+    # relación fuerte con el trabajo objetivo.
+    # ------------------------------------------------------------------
+
+    if dominio in DOMINIOS_CARGO_V01881:
+
+        funciones_dominio = DOMINIOS_CARGO_V01881[
+            dominio
+        ][
+            "funciones"
+        ]
+
+
+        cantidad_funcional = _cantidad_coincidencias_v01881(
+            texto_exp,
+            funciones_dominio
+        )
+
+
+        # --------------------------------------------------------------
+        # Para Finanzas permitimos funciones analíticas/reportería/KPI
+        # como evidencia funcional, reproduciendo nuestro caso histórico.
+        # --------------------------------------------------------------
+
+        minimo = (
+            2
+            if dominio == "finanzas"
+            else 2
+        )
+
+
+        if cantidad_funcional >= minimo:
+
+            return {
+
+                "clasificacion":
+                    "FUNCIONAL_RELEVANTE",
+
+                "peso":
+                    PESOS_EXPERIENCIA_CONTEXTUAL_V01882[
+                        "FUNCIONAL_RELEVANTE"
+                    ],
+
+                "razon":
+                    (
+                        "El cargo anterior es diferente, pero contiene "
+                        "funciones directamente útiles para el cargo objetivo."
+                    ),
+
+                "cargo_similitud":
+                    similitud,
+
+                "dominio_objetivo":
+                    dominio,
+
+                "coincidencias_funcionales":
+                    cantidad_funcional
+            }
+
+
+    # ------------------------------------------------------------------
+    # 3. RELACIONADA
+    # ------------------------------------------------------------------
+
+    if similitud >= 40:
+
+        return {
+
+            "clasificacion":
+                "RELACIONADA",
+
+            "peso":
+                PESOS_EXPERIENCIA_CONTEXTUAL_V01882[
+                    "RELACIONADA"
+                ],
+
+            "razon":
+                (
+                    "La experiencia pertenece a un cargo cercano o "
+                    "relacionado con la oportunidad."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_objetivo":
+                dominio
+        }
+
+
+    # ------------------------------------------------------------------
+    # 4. TRANSFERIBLE_ALTO_VALOR
+    # ------------------------------------------------------------------
+
+    cantidad_alto_valor = _cantidad_coincidencias_v01881(
+        texto_exp,
+        TRANSFERIBLES_ALTO_VALOR_V01881
+    )
+
+
+    if cantidad_alto_valor >= 2:
+
+        return {
+
+            "clasificacion":
+                "TRANSFERIBLE_ALTO_VALOR",
+
+            "peso":
+                PESOS_EXPERIENCIA_CONTEXTUAL_V01882[
+                    "TRANSFERIBLE_ALTO_VALOR"
+                ],
+
+            "razon":
+                (
+                    "La experiencia no es directa, pero contiene funciones "
+                    "analíticas o herramientas altamente transferibles."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_objetivo":
+                dominio,
+
+            "coincidencias_transferibles":
+                cantidad_alto_valor
+        }
+
+
+    # ------------------------------------------------------------------
+    # 5. TRANSFERIBLE
+    # ------------------------------------------------------------------
+
+    cantidad_general = _cantidad_coincidencias_v01881(
+        texto_exp,
+        TRANSFERIBLES_GENERALES_V01881
+    )
+
+
+    if cantidad_general >= 1:
+
+        return {
+
+            "clasificacion":
+                "TRANSFERIBLE",
+
+            "peso":
+                PESOS_EXPERIENCIA_CONTEXTUAL_V01882[
+                    "TRANSFERIBLE"
+                ],
+
+            "razon":
+                (
+                    "La experiencia aporta competencias profesionales "
+                    "generales que pueden trasladarse parcialmente al cargo."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_objetivo":
+                dominio,
+
+            "coincidencias_transferibles":
+                cantidad_general
+        }
+
+
+    return {
+
+        "clasificacion":
+            "SIN_RELACION_CLARA",
+
+        "peso":
+            0.0,
+
+        "razon":
+            (
+                "No detectamos suficiente relación entre esta experiencia "
+                "y el cargo objetivo."
+            ),
+
+        "cargo_similitud":
+            similitud,
+
+        "dominio_objetivo":
+            dominio
+    }
+
+
+def evaluar_experiencia_contextual_v01880(
+    candidato,
+    oferta,
+    perfil=None
+):
+
+    experiencias = []
+
+
+    if isinstance(
+        candidato,
+        dict
+    ):
+
+        experiencias = candidato.get(
+            "experiencias",
+            []
+        )
+
+
+    if (
+        not experiencias
+        and
+        isinstance(
+            perfil,
+            dict
+        )
+    ):
+
+        experiencias = perfil.get(
+            "experiencias",
+            []
+        )
+
+
+    experiencias = normalizar_experiencias_v01880(
+        experiencias
+    )
+
+
+    detalle = []
+
+
+    acumulados = {
+
+        "DIRECTA":
+            0.0,
+
+        "FUNCIONAL_RELEVANTE":
+            0.0,
+
+        "RELACIONADA":
+            0.0,
+
+        "TRANSFERIBLE_ALTO_VALOR":
+            0.0,
+
+        "TRANSFERIBLE":
+            0.0,
+
+        "SIN_RELACION_CLARA":
+            0.0
+    }
+
+
+    total = 0.0
+
+    equivalente = 0.0
+
+
+    for experiencia in experiencias:
+
+        años = float(
+            experiencia.get(
+                "años",
+                0
+            )
+            or
+            0
+        )
+
+
+        total += años
+
+
+        clasificacion = clasificar_experiencia_v01881(
+            experiencia,
+            oferta
+        )
+
+
+        tipo = clasificacion[
+            "clasificacion"
+        ]
+
+
+        peso = float(
+            clasificacion.get(
+                "peso",
+                0
+            )
+            or
+            0
+        )
+
+
+        if tipo in acumulados:
+
+            acumulados[
+                tipo
+            ] += años
+
+
+        equivalente += (
+            años
+            *
+            peso
+        )
+
+
+        detalle.append(
+            {
+
+                "cargo":
+                    experiencia.get(
+                        "cargo",
+                        ""
+                    ),
+
+                "empresa":
+                    experiencia.get(
+                        "empresa",
+                        ""
+                    ),
+
+                "area":
+                    experiencia.get(
+                        "area",
+                        ""
+                    ),
+
+                "años":
+                    años,
+
+                "clasificacion":
+                    tipo,
+
+                "peso":
+                    peso,
+
+                "años_equivalentes":
+                    años
+                    *
+                    peso,
+
+                "razon":
+                    clasificacion.get(
+                        "razon",
+                        ""
+                    ),
+
+                "cargo_similitud":
+                    clasificacion.get(
+                        "cargo_similitud",
+                        0
+                    ),
+
+                "dominio_objetivo":
+                    clasificacion.get(
+                        "dominio_objetivo"
+                    )
+            }
+        )
+
+
+    return {
+
+        "total":
+            total,
+
+        "directa":
+            acumulados[
+                "DIRECTA"
+            ],
+
+        "funcional_relevante":
+            acumulados[
+                "FUNCIONAL_RELEVANTE"
+            ],
+
+        "relacionada":
+            acumulados[
+                "RELACIONADA"
+            ],
+
+        "transferible_alto_valor":
+            acumulados[
+                "TRANSFERIBLE_ALTO_VALOR"
+            ],
+
+        "transferible":
+            acumulados[
+                "TRANSFERIBLE"
+            ],
+
+        "sin_relacion_clara":
+            acumulados[
+                "SIN_RELACION_CLARA"
+            ],
+
+        "equivalente":
+            equivalente,
+
+        "cantidad_experiencias":
+            len(
+                experiencias
+            ),
+
+        "detalle":
+            detalle
+    }
+
+
+def diferencia_experiencia_v01880(
+    candidato,
+    oferta,
+    perfil=None
+):
+
+    return evaluar_experiencia_contextual_v01880(
+        candidato,
+        oferta,
+        perfil
+    )
+
+
+def score_experiencia_contextual_v01882(
+    detalle,
+    oferta
+):
+
+    if not isinstance(
+        detalle,
+        dict
+    ):
+
+        return 0.0
+
+
+    if (
+        detalle.get(
+            "cantidad_experiencias",
+            0
+        )
+        <=
+        0
+    ):
+
+        return 0.0
+
+
+    equivalente = float(
+        detalle.get(
+            "equivalente",
+            0
+        )
+        or
+        0
+    )
+
+
+    requerida = 0.0
+
+
+    if isinstance(
+        oferta,
+        dict
+    ):
+
+        try:
+
+            requerida = float(
+                oferta.get(
+                    "experiencia",
+                    0
+                )
+                or
+                0
+            )
+
+
+        except Exception:
+
+            requerida = 0.0
+
+
+    if requerida <= 0:
+
+        # --------------------------------------------------------------
+        # Si la oferta no exige años concretos, la existencia de
+        # experiencia contextual relevante sigue siendo positiva.
+        # --------------------------------------------------------------
+
+        if equivalente > 0:
+
+            return 100.0
+
+
+        return 50.0
+
+
+    return limitar(
+        equivalente
+        /
+        requerida
+        *
+        100,
+        0,
+        100
+    )
+
+
+def limite_contextual_por_cargo_v01882(
+    evaluacion_base
+):
+
+    # ------------------------------------------------------------------
+    # V0.18.8.2 original:
+    # la experiencia contextual nunca puede alterar el resultado
+    # en más de 8 puntos.
+    #
+    # Conservamos el helper por separado porque posteriormente podremos
+    # refinar el límite según el tipo de transición profesional.
+    # ------------------------------------------------------------------
+
+    return 8.0
+
+
+def ajuste_experiencia_contextual_v01882(
+    score_contextual,
+    detalle,
+    evaluacion_base
+):
+
+    if not isinstance(
+        detalle,
+        dict
+    ):
+
+        return 0.0
+
+
+    if (
+        detalle.get(
+            "cantidad_experiencias",
+            0
+        )
+        <=
+        0
+    ):
+
+        # --------------------------------------------------------------
+        # Sin experiencias estructuradas no penalizamos.
+        # Compatibilidad histórica intacta.
+        # --------------------------------------------------------------
+
+        return 0.0
+
+
+    limite_ajuste = limite_contextual_por_cargo_v01882(
+        evaluacion_base
+    )
+
+
+    # ------------------------------------------------------------------
+    # 50 = punto neutro.
+    # 100 = +8.
+    #   0 = -8.
+    # ------------------------------------------------------------------
+
+    ajuste = (
+        (
+            float(
+                score_contextual
+            )
+            -
+            50.0
+        )
+        /
+        50.0
+        *
+        limite_ajuste
+    )
+
+
+    return limitar(
+        ajuste,
+        -limite_ajuste,
+        limite_ajuste
+    )
+
+
+def razon_experiencia_contextual_v01882(
+    detalle
+):
+
+    if not isinstance(
+        detalle,
+        dict
+    ):
+
+        return (
+            "No existe información estructurada suficiente."
+        )
+
+
+    if detalle.get(
+        "directa",
+        0
+    ) > 0:
+
+        return (
+            "El perfil contiene experiencia directamente relacionada "
+            "con el cargo."
+        )
+
+
+    if detalle.get(
+        "funcional_relevante",
+        0
+    ) > 0:
+
+        return (
+            "El perfil contiene experiencia funcionalmente relevante, "
+            "aunque el nombre del cargo anterior sea diferente."
+        )
+
+
+    if detalle.get(
+        "relacionada",
+        0
+    ) > 0:
+
+        return (
+            "El perfil contiene experiencia relacionada con el cargo."
+        )
+
+
+    if detalle.get(
+        "transferible_alto_valor",
+        0
+    ) > 0:
+
+        return (
+            "El perfil contiene experiencia transferible de alto valor."
+        )
+
+
+    if detalle.get(
+        "transferible",
+        0
+    ) > 0:
+
+        return (
+            "El perfil contiene competencias profesionales transferibles."
+        )
+
+
+    if detalle.get(
+        "cantidad_experiencias",
+        0
+    ) > 0:
+
+        return (
+            "Existen experiencias registradas, pero no detectamos "
+            "una relación profesional clara con este cargo."
+        )
+
+
+    return (
+        "No existen experiencias estructuradas suficientes para "
+        "aplicar ajuste contextual."
+    )
+
+# ------------------------------------------------------------------------------------------------
+# V0.18.10 · COPIA FÍSICA DE similitud_cargo() V1
+# ------------------------------------------------------------------------------------------------
+
+def similitud_cargo_pre_v01810(cargo_oferta, cargo_deseado):
+    oferta = normalizar_cargo(cargo_oferta)
+    deseado = normalizar_cargo(cargo_deseado)
+    if oferta == deseado:
+        return 100
+    return RELACIONES_CARGOS.get(deseado, {}).get(oferta, 0)
+
+
+# === BEGIN V0.18.10 SEMANTICA PROFESIONAL V2 R1.1 ===
+
+SEMANTICA_PROFESIONAL_VERSION_V01810 = "V2-R1.1"
+
+
+FAMILIAS_CARGO_V01810 = {
+
+    "analisis_financiero": [
+
+        "analista financiero",
+        "analista de riesgo financiero",
+        "analista de riesgos financieros",
+        "analista de credito",
+        "analista de inversiones",
+        "analista de control de gestion",
+        "analista de planificacion financiera",
+        "analista de tesoreria"
+
+    ],
+
+    "contabilidad_finanzas": [
+
+        "contador",
+        "contador auditor",
+        "analista contable",
+        "analista de contabilidad",
+        "encargado contable"
+
+    ],
+
+    "datos_bi": [
+
+        "analista de datos",
+        "data analyst",
+        "analista bi",
+        "analista de inteligencia de negocios",
+        "business intelligence analyst",
+        "especialista bi"
+
+    ],
+
+    "banca_comercial": [
+
+        "ejecutivo de cuentas bancarias",
+        "ejecutivo bancario",
+        "ejecutivo de cuentas",
+        "ejecutivo de banca",
+        "ejecutivo de banca personas",
+        "ejecutivo de banca empresas"
+
+    ],
+
+    "comercial_ventas": [
+
+        "ejecutivo comercial",
+        "ejecutivo de ventas",
+        "ejecutivo de negocios b2b",
+        "jefe comercial",
+        "account manager",
+        "key account manager",
+        "vendedor"
+
+    ],
+
+    "software": [
+
+        "desarrollador de software",
+        "desarrollador",
+        "programador",
+        "software engineer",
+        "ingeniero de software",
+        "backend developer",
+        "frontend developer"
+
+    ],
+
+    "diseno": [
+
+        "diseñador grafico",
+        "disenador grafico",
+        "graphic designer",
+        "director de arte"
+
+    ],
+
+    "salud_enfermeria": [
+
+        "enfermero",
+        "enfermera",
+        "enfermero clinico",
+        "enfermera clinica"
+
+    ],
+
+    "educacion": [
+
+        "profesor",
+        "profesor de historia",
+        "docente",
+        "educador"
+
+    ],
+
+    "gastronomia": [
+
+        "chef",
+        "cocinero",
+        "jefe de cocina"
+
+    ],
+
+    "ingenieria_civil": [
+
+        "ingeniero civil",
+        "ingeniero de proyectos",
+        "ingeniero estructural"
+
+    ]
+
+}
+
+
+DOMINIO_FAMILIA_V01810 = {
+
+    "analisis_financiero":
+        "finanzas",
+
+    "contabilidad_finanzas":
+        "finanzas",
+
+    "datos_bi":
+        "datos",
+
+    "banca_comercial":
+        "banca_comercial",
+
+    "comercial_ventas":
+        "comercial",
+
+    "software":
+        "tecnologia",
+
+    "diseno":
+        "diseno",
+
+    "salud_enfermeria":
+        "salud",
+
+    "educacion":
+        "educacion",
+
+    "gastronomia":
+        "gastronomia",
+
+    "ingenieria_civil":
+        "ingenieria"
+
+}
+
+
+RELACIONES_FAMILIAS_V01810 = {
+
+    ("analisis_financiero", "contabilidad_finanzas"):
+        50,
+
+    ("contabilidad_finanzas", "analisis_financiero"):
+        50,
+
+    ("analisis_financiero", "datos_bi"):
+        30,
+
+    ("datos_bi", "analisis_financiero"):
+        30,
+
+    ("analisis_financiero", "banca_comercial"):
+        35,
+
+    ("banca_comercial", "analisis_financiero"):
+        35,
+
+    ("comercial_ventas", "banca_comercial"):
+        55,
+
+    ("banca_comercial", "comercial_ventas"):
+        55,
+
+    ("comercial_ventas", "analisis_financiero"):
+        20,
+
+    ("analisis_financiero", "comercial_ventas"):
+        20,
+
+    ("comercial_ventas", "datos_bi"):
+        20,
+
+    ("datos_bi", "comercial_ventas"):
+        20,
+
+    ("software", "datos_bi"):
+        45,
+
+    ("datos_bi", "software"):
+        45,
+
+    ("contabilidad_finanzas", "datos_bi"):
+        30,
+
+    ("datos_bi", "contabilidad_finanzas"):
+        30,
+
+    ("contabilidad_finanzas", "banca_comercial"):
+        35,
+
+    ("banca_comercial", "contabilidad_finanzas"):
+        35
+
+}
+
+
+def _normalizar_semantica_v01810(
+    valor
+):
+
+    return normalizar(
+        str(
+            valor
+            or
+            ""
+        )
+    )
+
+
+def familia_cargo_v01810(
+    cargo
+):
+
+    cargo_norm = _normalizar_semantica_v01810(
+        normalizar_cargo(
+            cargo
+        )
+    )
+
+
+    for familia, cargos in FAMILIAS_CARGO_V01810.items():
+
+        for candidato in cargos:
+
+            if cargo_norm == _normalizar_semantica_v01810(
+                candidato
+            ):
+
+                return familia
+
+
+    if (
+        "analista"
+        in cargo_norm
+        and
+        any(
+            palabra
+            in cargo_norm
+
+            for palabra
+            in [
+
+                "financ",
+                "riesgo",
+                "credito",
+                "inversion",
+                "control de gestion",
+                "tesorer"
+
+            ]
+        )
+    ):
+
+        return "analisis_financiero"
+
+
+    if (
+        "analista"
+        in cargo_norm
+        and
+        any(
+            palabra
+            in cargo_norm
+
+            for palabra
+            in [
+
+                "datos",
+                "inteligencia de negocios",
+                "business intelligence",
+                " bi"
+
+            ]
+        )
+    ):
+
+        return "datos_bi"
+
+
+    if any(
+        palabra
+        in cargo_norm
+
+        for palabra
+        in [
+
+            "bancario",
+            "bancaria",
+            "banca personas",
+            "banca empresas"
+
+        ]
+    ):
+
+        return "banca_comercial"
+
+
+    if any(
+        palabra
+        in cargo_norm
+
+        for palabra
+        in [
+
+            "ejecutivo comercial",
+            "ventas",
+            "negocios b2b",
+            "account manager",
+            "jefe comercial"
+
+        ]
+    ):
+
+        return "comercial_ventas"
+
+
+    if any(
+        palabra
+        in cargo_norm
+
+        for palabra
+        in [
+
+            "contador",
+            "contable",
+            "contabilidad"
+
+        ]
+    ):
+
+        return "contabilidad_finanzas"
+
+
+    if any(
+        palabra
+        in cargo_norm
+
+        for palabra
+        in [
+
+            "desarrollador",
+            "programador",
+            "software"
+
+        ]
+    ):
+
+        return "software"
+
+
+    if any(
+        palabra
+        in cargo_norm
+
+        for palabra
+        in [
+
+            "disenador",
+            "designer",
+            "director de arte"
+
+        ]
+    ):
+
+        return "diseno"
+
+
+    if "enfermer" in cargo_norm:
+
+        return "salud_enfermeria"
+
+
+    if (
+        "profesor"
+        in cargo_norm
+
+        or
+
+        "docente"
+        in cargo_norm
+    ):
+
+        return "educacion"
+
+
+    if (
+        cargo_norm
+        ==
+        "chef"
+
+        or
+
+        "cocinero"
+        in cargo_norm
+
+        or
+
+        "jefe de cocina"
+        in cargo_norm
+    ):
+
+        return "gastronomia"
+
+
+    if (
+        "ingeniero civil"
+        in cargo_norm
+
+        or
+
+        "ingeniero estructural"
+        in cargo_norm
+    ):
+
+        return "ingenieria_civil"
+
+
+    return None
+
+
+def dominio_cargo_v01810(
+    cargo
+):
+
+    return DOMINIO_FAMILIA_V01810.get(
+        familia_cargo_v01810(
+            cargo
+        )
+    )
+
+
+# ------------------------------------------------------------------------------------------------
+# NUEVA similitud_cargo()
+#
+# IMPORTANTE:
+#
+# similitud_cargo_pre_v01810() es ahora una función física independiente,
+# NO un alias.
+# ------------------------------------------------------------------------------------------------
+
+def similitud_cargo(
+    cargo_oferta,
+    cargo_deseado
+):
+
+    base = float(
+        similitud_cargo_pre_v01810(
+            cargo_oferta,
+            cargo_deseado
+        )
+    )
+
+
+    if base > 0:
+
+        return base
+
+
+    oferta_norm = _normalizar_semantica_v01810(
+        normalizar_cargo(
+            cargo_oferta
+        )
+    )
+
+
+    deseado_norm = _normalizar_semantica_v01810(
+        normalizar_cargo(
+            cargo_deseado
+        )
+    )
+
+
+    if oferta_norm == deseado_norm:
+
+        return 100.0
+
+
+    familia_oferta = familia_cargo_v01810(
+        cargo_oferta
+    )
+
+
+    familia_deseada = familia_cargo_v01810(
+        cargo_deseado
+    )
+
+
+    if (
+        familia_oferta is None
+
+        or
+
+        familia_deseada is None
+    ):
+
+        return 0.0
+
+
+    if familia_oferta == familia_deseada:
+
+        return 75.0
+
+
+    return float(
+        RELACIONES_FAMILIAS_V01810.get(
+            (
+                familia_deseada,
+                familia_oferta
+            ),
+            0
+        )
+    )
+
+
+FUNCIONES_DOMINIO_V01810 = {
+
+    "finanzas": [
+
+        "analisis",
+        "analisis de kpi",
+        "kpi",
+        "reporteria",
+        "reporteria financiera",
+        "forecast",
+        "presupuesto",
+        "planificacion",
+        "control de gestion",
+        "estados financieros",
+        "conciliaciones",
+        "tesoreria",
+        "excel"
+
+    ],
+
+    "banca_comercial": [
+
+        "cartera de clientes",
+        "gestion de cartera",
+        "clientes",
+        "ventas",
+        "ventas consultivas",
+        "negociacion",
+        "b2b",
+        "fidelizacion",
+        "productos financieros",
+        "credito",
+        "cumplimiento de metas",
+        "seguimiento comercial"
+
+    ],
+
+    "comercial": [
+
+        "cartera de clientes",
+        "gestion de clientes",
+        "ventas",
+        "ventas consultivas",
+        "b2b",
+        "negociacion",
+        "forecast",
+        "kpi",
+        "seguimiento de resultados",
+        "cumplimiento de metas"
+
+    ],
+
+    "datos": [
+
+        "analisis de datos",
+        "power bi",
+        "sql",
+        "python",
+        "dashboard",
+        "visualizacion",
+        "etl",
+        "bases de datos",
+        "modelado de datos"
+
+    ],
+
+    "tecnologia": [
+
+        "python",
+        "java",
+        "javascript",
+        "backend",
+        "frontend",
+        "api",
+        "apis",
+        "sql",
+        "bases de datos",
+        "software"
+
+    ],
+
+    "diseno": [
+
+        "photoshop",
+        "illustrator",
+        "branding",
+        "diseño",
+        "diseno",
+        "contenido visual",
+        "piezas graficas"
+
+    ],
+
+    "salud": [
+
+        "pacientes",
+        "enfermeria",
+        "clinico",
+        "medicacion",
+        "cuidados",
+        "salud"
+
+    ],
+
+    "educacion": [
+
+        "docencia",
+        "enseñanza",
+        "ensenanza",
+        "planificacion de clases",
+        "evaluacion",
+        "estudiantes"
+
+    ],
+
+    "gastronomia": [
+
+        "cocina",
+        "alimentos",
+        "preparacion",
+        "menu",
+        "gastronomia"
+
+    ],
+
+    "ingenieria": [
+
+        "proyectos",
+        "estructuras",
+        "calculo estructural",
+        "obra",
+        "ingenieria civil"
+
+    ]
+
+}
+
+
+TRANSFERIBLES_ALTO_VALOR_V01810 = [
+
+    "analisis",
+    "analisis de datos",
+    "kpi",
+    "reporteria",
+    "forecast",
+    "power bi",
+    "excel",
+    "sql",
+    "dashboard",
+    "visualizacion"
+
+]
+
+
+TRANSFERIBLES_GENERALES_V01810 = [
+
+    "gestion",
+    "coordinacion",
+    "clientes",
+    "comunicacion",
+    "planificacion",
+    "seguimiento",
+    "organizacion",
+    "negociacion"
+
+]
+
+
+TRANSFERENCIA_ALTA_DOMINIOS_V01810 = {
+
+    ("comercial", "finanzas"),
+
+    ("comercial", "datos"),
+
+    ("comercial", "banca_comercial"),
+
+    ("finanzas", "datos"),
+
+    ("finanzas", "banca_comercial"),
+
+    ("finanzas", "comercial"),
+
+    ("banca_comercial", "finanzas"),
+
+    ("banca_comercial", "comercial"),
+
+    ("banca_comercial", "datos"),
+
+    ("tecnologia", "datos"),
+
+    ("datos", "tecnologia"),
+
+    ("datos", "finanzas"),
+
+    ("finanzas", "tecnologia")
+
+}
+
+
+PESOS_EXPERIENCIA_V01810 = {
+
+    "DIRECTA":
+        1.00,
+
+    "FUNCIONAL_RELEVANTE":
+        0.85,
+
+    "RELACIONADA":
+        0.65,
+
+    "TRANSFERIBLE_ALTO_VALOR":
+        0.45,
+
+    "TRANSFERIBLE":
+        0.20,
+
+    "SIN_RELACION_CLARA":
+        0.00,
+
+    "SIN_EVIDENCIA":
+        0.00
+
+}
+
+
+def _contar_coincidencias_semantica_v01810(
+    texto_base,
+    palabras
+):
+
+    texto_norm = _normalizar_semantica_v01810(
+        texto_base
+    )
+
+
+    encontradas = set()
+
+
+    for palabra in palabras:
+
+        palabra_norm = _normalizar_semantica_v01810(
+            palabra
+        )
+
+
+        if (
+            palabra_norm
+
+            and
+
+            palabra_norm
+            in
+            texto_norm
+        ):
+
+            encontradas.add(
+                palabra_norm
+            )
+
+
+    return len(
+        encontradas
+    )
+
+
+def _texto_experiencia_semantica_v01810(
+    experiencia
+):
+
+    experiencia = normalizar_experiencia_v01880(
+        experiencia
+    )
+
+
+    if not experiencia:
+
+        return ""
+
+
+    partes = [
+
+        experiencia.get(
+            "cargo",
+            ""
+        ),
+
+        experiencia.get(
+            "area",
+            ""
+        )
+
+    ]
+
+
+    funciones = experiencia.get(
+        "funciones",
+        []
+    )
+
+
+    if isinstance(
+        funciones,
+        str
+    ):
+
+        partes.append(
+            funciones
+        )
+
+
+    elif isinstance(
+        funciones,
+        (
+            list,
+            tuple,
+            set
+        )
+    ):
+
+        partes.extend(
+            str(
+                x
+            )
+
+            for x
+            in funciones
+        )
+
+
+    habilidades = experiencia.get(
+        "habilidades",
+        []
+    )
+
+
+    if isinstance(
+        habilidades,
+        dict
+    ):
+
+        partes.extend(
+            habilidades.keys()
+        )
+
+
+    elif isinstance(
+        habilidades,
+        (
+            list,
+            tuple,
+            set
+        )
+    ):
+
+        partes.extend(
+            str(
+                x
+            )
+
+            for x
+            in habilidades
+        )
+
+
+    return _normalizar_semantica_v01810(
+        " ".join(
+            str(
+                parte
+                or
+                ""
+            )
+
+            for parte
+            in partes
+        )
+    )
+
+
+def clasificar_experiencia_v01881(
+    experiencia,
+    oferta
+):
+
+    experiencia = normalizar_experiencia_v01880(
+        experiencia
+    )
+
+
+    if not experiencia:
+
+        return {
+
+            "clasificacion":
+                "SIN_EVIDENCIA",
+
+            "peso":
+                0.0,
+
+            "razon":
+                "No existe suficiente información de esta experiencia.",
+
+            "cargo_similitud":
+                0.0,
+
+            "dominio_fuente":
+                None,
+
+            "dominio_objetivo":
+                None
+
+        }
+
+
+    cargo_fuente = experiencia.get(
+        "cargo",
+        ""
+    )
+
+
+    cargo_destino = (
+
+        oferta.get(
+            "cargo",
+            ""
+        )
+
+        if isinstance(
+            oferta,
+            dict
+        )
+
+        else
+        ""
+
+    )
+
+
+    similitud = similitud_cargo(
+        cargo_fuente,
+        cargo_destino
+    )
+
+
+    dominio_fuente = dominio_cargo_v01810(
+        cargo_fuente
+    )
+
+
+    dominio_destino = dominio_cargo_v01810(
+        cargo_destino
+    )
+
+
+    texto_exp = _texto_experiencia_semantica_v01810(
+        experiencia
+    )
+
+
+    # ------------------------------------------------------------------------------------------------------------
+    # 1. DIRECTA
+    # ------------------------------------------------------------------------------------------------------------
+
+    if similitud >= 70:
+
+        return {
+
+            "clasificacion":
+                "DIRECTA",
+
+            "peso":
+                PESOS_EXPERIENCIA_V01810[
+                    "DIRECTA"
+                ],
+
+            "razon":
+                (
+                    "El cargo pertenece a la misma familia profesional "
+                    "o posee una relación nominal directa."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_fuente":
+                dominio_fuente,
+
+            "dominio_objetivo":
+                dominio_destino
+
+        }
+
+
+    # ------------------------------------------------------------------------------------------------------------
+    # 2. FUNCIONAL_RELEVANTE
+    # ------------------------------------------------------------------------------------------------------------
+
+    funciones_destino = FUNCIONES_DOMINIO_V01810.get(
+        dominio_destino,
+        []
+    )
+
+
+    coincidencias_funcionales = _contar_coincidencias_semantica_v01810(
+        texto_exp,
+        funciones_destino
+    )
+
+
+    minimo_funcional = 2
+
+
+    if dominio_destino == "datos":
+
+        tecnicas_datos = _contar_coincidencias_semantica_v01810(
+
+            texto_exp,
+
+            [
+
+                "sql",
+                "python",
+                "etl",
+                "bases de datos",
+                "modelado de datos",
+                "dashboard",
+                "visualizacion",
+                "power bi"
+
+            ]
+
+        )
+
+
+        if (
+            coincidencias_funcionales
+            >=
+            minimo_funcional
+
+            and
+
+            tecnicas_datos
+            >=
+            2
+        ):
+
+            return {
+
+                "clasificacion":
+                    "FUNCIONAL_RELEVANTE",
+
+                "peso":
+                    PESOS_EXPERIENCIA_V01810[
+                        "FUNCIONAL_RELEVANTE"
+                    ],
+
+                "razon":
+                    (
+                        "La experiencia contiene funciones y herramientas "
+                        "técnicas directamente útiles para el dominio de datos."
+                    ),
+
+                "cargo_similitud":
+                    similitud,
+
+                "dominio_fuente":
+                    dominio_fuente,
+
+                "dominio_objetivo":
+                    dominio_destino,
+
+                "coincidencias_funcionales":
+                    coincidencias_funcionales,
+
+                "coincidencias_tecnicas":
+                    tecnicas_datos
+
+            }
+
+
+    elif (
+        dominio_destino is not None
+
+        and
+
+        coincidencias_funcionales
+        >=
+        minimo_funcional
+    ):
+
+        return {
+
+            "clasificacion":
+                "FUNCIONAL_RELEVANTE",
+
+            "peso":
+                PESOS_EXPERIENCIA_V01810[
+                    "FUNCIONAL_RELEVANTE"
+                ],
+
+            "razon":
+                (
+                    "El cargo anterior es diferente, pero la experiencia "
+                    "contiene funciones propias del dominio profesional destino."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_fuente":
+                dominio_fuente,
+
+            "dominio_objetivo":
+                dominio_destino,
+
+            "coincidencias_funcionales":
+                coincidencias_funcionales
+
+        }
+
+
+    # ------------------------------------------------------------------------------------------------------------
+    # 3. RELACIONADA
+    # ------------------------------------------------------------------------------------------------------------
+
+    if similitud >= 40:
+
+        return {
+
+            "clasificacion":
+                "RELACIONADA",
+
+            "peso":
+                PESOS_EXPERIENCIA_V01810[
+                    "RELACIONADA"
+                ],
+
+            "razon":
+                (
+                    "La experiencia pertenece a una familia profesional "
+                    "relacionada con la oportunidad."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_fuente":
+                dominio_fuente,
+
+            "dominio_objetivo":
+                dominio_destino
+
+        }
+
+
+    # ------------------------------------------------------------------------------------------------------------
+    # 4. TRANSFERIBLE_ALTO_VALOR
+    # ------------------------------------------------------------------------------------------------------------
+
+    cantidad_alto_valor = _contar_coincidencias_semantica_v01810(
+        texto_exp,
+        TRANSFERIBLES_ALTO_VALOR_V01810
+    )
+
+
+    transferencia_admitida = (
+
+        dominio_fuente is not None
+
+        and
+
+        dominio_destino is not None
+
+        and
+
+        (
+            dominio_fuente,
+            dominio_destino
+        )
+        in
+        TRANSFERENCIA_ALTA_DOMINIOS_V01810
+
+    )
+
+
+    if (
+        cantidad_alto_valor
+        >=
+        2
+
+        and
+
+        transferencia_admitida
+    ):
+
+        return {
+
+            "clasificacion":
+                "TRANSFERIBLE_ALTO_VALOR",
+
+            "peso":
+                PESOS_EXPERIENCIA_V01810[
+                    "TRANSFERIBLE_ALTO_VALOR"
+                ],
+
+            "razon":
+                (
+                    "La experiencia no es directa, pero combina capacidades "
+                    "de alto valor con una transición profesional plausible "
+                    "hacia el dominio destino."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_fuente":
+                dominio_fuente,
+
+            "dominio_objetivo":
+                dominio_destino,
+
+            "coincidencias_transferibles":
+                cantidad_alto_valor
+
+        }
+
+
+    # ------------------------------------------------------------------------------------------------------------
+    # 5. TRANSFERIBLE
+    # ------------------------------------------------------------------------------------------------------------
+
+    cantidad_general = _contar_coincidencias_semantica_v01810(
+        texto_exp,
+        TRANSFERIBLES_GENERALES_V01810
+    )
+
+
+    if (
+        cantidad_general
+        >=
+        1
+
+        and
+
+        dominio_fuente is not None
+
+        and
+
+        dominio_destino is not None
+
+        and
+
+        (
+            dominio_fuente
+            ==
+            dominio_destino
+
+            or
+
+            (
+                dominio_fuente,
+                dominio_destino
+            )
+            in
+            TRANSFERENCIA_ALTA_DOMINIOS_V01810
+        )
+    ):
+
+        return {
+
+            "clasificacion":
+                "TRANSFERIBLE",
+
+            "peso":
+                PESOS_EXPERIENCIA_V01810[
+                    "TRANSFERIBLE"
+                ],
+
+            "razon":
+                (
+                    "La experiencia aporta competencias generales "
+                    "transferibles hacia un dominio profesional compatible."
+                ),
+
+            "cargo_similitud":
+                similitud,
+
+            "dominio_fuente":
+                dominio_fuente,
+
+            "dominio_objetivo":
+                dominio_destino,
+
+            "coincidencias_transferibles":
+                cantidad_general
+
+        }
+
+
+    return {
+
+        "clasificacion":
+            "SIN_RELACION_CLARA",
+
+        "peso":
+            0.0,
+
+        "razon":
+            (
+                "No existe suficiente evidencia de relación entre esta "
+                "experiencia y el dominio profesional de la oportunidad."
+            ),
+
+        "cargo_similitud":
+            similitud,
+
+        "dominio_fuente":
+            dominio_fuente,
+
+        "dominio_objetivo":
+            dominio_destino
+
+    }
+
+
+# === END V0.18.10 SEMANTICA PROFESIONAL V2 R1.1 ===
+
+
+def evaluar_oferta_base_v01882(
     oferta,
     candidato,
     perfil
@@ -4231,6 +8039,828 @@ def evaluar_oferta(
         "matches":
             matches
     }
+
+# ======================================================================
+# V0.18.8.3-R1
+# EQUIDAD / NO DISCRIMINACIÓN
+# ======================================================================
+
+
+ATRIBUTOS_NO_SCORE_V01883 = {
+
+    # ------------------------------------------------------------------
+    # Identificación personal
+    # ------------------------------------------------------------------
+
+    "nombre",
+    "nombre_completo",
+    "name",
+    "full_name",
+
+    # ------------------------------------------------------------------
+    # Edad / nacimiento
+    # ------------------------------------------------------------------
+
+    "edad",
+    "age",
+    "fecha_nacimiento",
+    "fecha_de_nacimiento",
+    "nacimiento",
+    "birthdate",
+    "birth_date",
+
+    # ------------------------------------------------------------------
+    # Sexo / género / orientación
+    # ------------------------------------------------------------------
+
+    "sexo",
+    "sex",
+    "genero",
+    "género",
+    "gender",
+    "orientacion_sexual",
+    "orientación_sexual",
+    "sexual_orientation",
+
+    # ------------------------------------------------------------------
+    # Estado civil / familia / embarazo
+    # ------------------------------------------------------------------
+
+    "estado_civil",
+    "marital_status",
+    "embarazo",
+    "pregnancy",
+    "hijos",
+    "children",
+    "situacion_familiar",
+    "situación_familiar",
+    "family_status",
+
+    # ------------------------------------------------------------------
+    # Religión
+    # ------------------------------------------------------------------
+
+    "religion",
+    "religión",
+    "religious_belief",
+
+    # ------------------------------------------------------------------
+    # Raza / etnia / nacionalidad sensible si se usara como criterio
+    # ------------------------------------------------------------------
+
+    "raza",
+    "race",
+    "etnia",
+    "ethnicity",
+
+    # ------------------------------------------------------------------
+    # Salud / discapacidad
+    # ------------------------------------------------------------------
+
+    "salud",
+    "health",
+    "condicion_medica",
+    "condición_médica",
+    "medical_condition",
+    "discapacidad",
+    "disability",
+
+    # ------------------------------------------------------------------
+    # Imagen / apariencia
+    # ------------------------------------------------------------------
+
+    "foto",
+    "fotografia",
+    "fotografía",
+    "photo",
+    "imagen",
+    "image",
+    "apariencia",
+    "appearance",
+
+    # ------------------------------------------------------------------
+    # Política / sindical
+    # ------------------------------------------------------------------
+
+    "afiliacion_politica",
+    "afiliación_política",
+    "political_affiliation",
+    "partido_politico",
+    "partido_político",
+
+    "sindicato",
+    "union",
+    "trade_union",
+    "afiliacion_sindical",
+    "afiliación_sindical",
+
+    # ------------------------------------------------------------------
+    # Otros atributos que no deben aportar al score
+    # ------------------------------------------------------------------
+
+    "rut",
+    "dni",
+    "pasaporte",
+    "passport",
+    "telefono",
+    "teléfono",
+    "phone",
+    "email",
+    "correo"
+}
+
+
+def _normalizar_clave_equidad_v01883(
+    clave
+):
+
+    texto = str(
+        clave
+        or
+        ""
+    ).strip().lower()
+
+
+    reemplazos = {
+
+        "á":
+            "a",
+
+        "é":
+            "e",
+
+        "í":
+            "i",
+
+        "ó":
+            "o",
+
+        "ú":
+            "u",
+
+        "ü":
+            "u",
+
+        "ñ":
+            "n"
+    }
+
+
+    for origen, destino in reemplazos.items():
+
+        texto = texto.replace(
+            origen,
+            destino
+        )
+
+
+    texto = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        texto
+    )
+
+
+    return texto.strip(
+        "_"
+    )
+
+
+ATRIBUTOS_NO_SCORE_NORMALIZADOS_V01883 = {
+
+    _normalizar_clave_equidad_v01883(
+        atributo
+    )
+
+    for atributo
+    in ATRIBUTOS_NO_SCORE_V01883
+}
+
+
+def sanitizar_para_score_v01883(
+    valor
+):
+
+    # ------------------------------------------------------------------
+    # Diccionarios:
+    #
+    # eliminamos claves sensibles recursivamente.
+    # ------------------------------------------------------------------
+
+    if isinstance(
+        valor,
+        dict
+    ):
+
+        limpio = {}
+
+
+        for clave, contenido in valor.items():
+
+            clave_norm = _normalizar_clave_equidad_v01883(
+                clave
+            )
+
+
+            if clave_norm in ATRIBUTOS_NO_SCORE_NORMALIZADOS_V01883:
+
+                continue
+
+
+            limpio[
+                clave
+            ] = sanitizar_para_score_v01883(
+                contenido
+            )
+
+
+        return limpio
+
+
+    # ------------------------------------------------------------------
+    # Listas
+    # ------------------------------------------------------------------
+
+    if isinstance(
+        valor,
+        list
+    ):
+
+        return [
+
+            sanitizar_para_score_v01883(
+                item
+            )
+
+            for item
+            in valor
+        ]
+
+
+    # ------------------------------------------------------------------
+    # Tuplas
+    # ------------------------------------------------------------------
+
+    if isinstance(
+        valor,
+        tuple
+    ):
+
+        return tuple(
+
+            sanitizar_para_score_v01883(
+                item
+            )
+
+            for item
+            in valor
+        )
+
+
+    # ------------------------------------------------------------------
+    # Sets
+    # ------------------------------------------------------------------
+
+    if isinstance(
+        valor,
+        set
+    ):
+
+        return {
+
+            sanitizar_para_score_v01883(
+                item
+            )
+
+            for item
+            in valor
+        }
+
+
+    # ------------------------------------------------------------------
+    # Escalares
+    # ------------------------------------------------------------------
+
+    return valor
+
+
+def metadata_equidad_v01883():
+
+    return {
+
+        "equidad_activa":
+            True,
+
+        "atributos_fuera_score":
+            sorted(
+                ATRIBUTOS_NO_SCORE_NORMALIZADOS_V01883
+            ),
+
+        "significado_score":
+            (
+                "El porcentaje representa alineación con una oportunidad "
+                "según la información profesional disponible."
+            ),
+
+        "no_es_probabilidad_contratacion":
+            True,
+
+        "ausencia_informacion_no_implica_incapacidad":
+            True,
+
+        "principio":
+            (
+                "Evaluamos la compatibilidad con esta oportunidad, "
+                "no el valor profesional de la persona."
+            )
+    }
+
+
+def comentario_equidad_v01883():
+
+    return (
+        "La ausencia de información en el CV o perfil no se interpreta "
+        "automáticamente como ausencia de capacidad profesional."
+    )
+
+def evaluar_oferta_contextual_pre_r24(
+    oferta,
+    candidato,
+    perfil
+):
+
+    # ------------------------------------------------------------------
+    # 1. Evaluación histórica completa.
+    # ------------------------------------------------------------------
+
+    evaluacion = evaluar_oferta_base_v01882(
+        oferta,
+        candidato,
+        perfil
+    )
+
+
+    final_base = float(
+        evaluacion.get(
+            "final",
+            0
+        )
+        or
+        0
+    )
+
+
+    # ------------------------------------------------------------------
+    # 2. Experiencia contextual.
+    # ------------------------------------------------------------------
+
+    detalle_contextual = evaluar_experiencia_contextual_v01880(
+        candidato,
+        oferta,
+        perfil
+    )
+
+
+    score_contextual = score_experiencia_contextual_v01882(
+        detalle_contextual,
+        oferta
+    )
+
+
+    ajuste_contextual = ajuste_experiencia_contextual_v01882(
+        score_contextual,
+        detalle_contextual,
+        evaluacion
+    )
+
+
+    # ------------------------------------------------------------------
+    # 3. Ajuste controlado.
+    # ------------------------------------------------------------------
+
+    final_contextual = limitar(
+        final_base
+        +
+        ajuste_contextual,
+        0,
+        100
+    )
+
+
+    # ------------------------------------------------------------------
+    # 4. Guardrails vuelven a ejecutarse DESPUÉS del ajuste.
+    #
+    # La experiencia contextual nunca puede saltarse:
+    #
+    # - cargo incompatible
+    # - brechas críticas
+    # - límites históricos del motor
+    # ------------------------------------------------------------------
+
+    final_contextual = aplicar_guardrails(
+        final_contextual,
+        evaluacion[
+            "cargo"
+        ],
+        evaluacion[
+            "brechas"
+        ]
+    )
+
+
+    evaluacion[
+        "final_base"
+    ] = final_base
+
+
+    evaluacion[
+        "final"
+    ] = final_contextual
+
+
+    evaluacion[
+        "experiencia_contextual_score"
+    ] = score_contextual
+
+
+    evaluacion[
+        "experiencia_equivalente"
+    ] = detalle_contextual.get(
+        "equivalente",
+        0
+    )
+
+
+    evaluacion[
+        "experiencia_contextual_ajuste"
+    ] = ajuste_contextual
+
+
+    evaluacion[
+        "experiencia_contextual_limite"
+    ] = limite_contextual_por_cargo_v01882(
+        evaluacion
+    )
+
+
+    evaluacion[
+        "experiencia_contextual_razon"
+    ] = razon_experiencia_contextual_v01882(
+        detalle_contextual
+    )
+
+
+    evaluacion[
+        "experiencia_contextual_detalle"
+    ] = detalle_contextual
+
+
+    return evaluacion
+
+def aplicar_guardrail_post_contexto_v01824(
+    score,
+    brechas
+):
+
+    score = float(
+        score
+        or
+        0
+    )
+
+
+    brechas = (
+        brechas
+        if isinstance(
+            brechas,
+            list
+        )
+        else []
+    )
+
+
+    # ------------------------------------------------------------------
+    # HERRAMIENTA ESPECÍFICA CRÍTICA
+    #
+    # La experiencia transferible o funcional NO debe borrar una brecha
+    # técnica específica que la oferta considera importante.
+    #
+    # Conservamos por ello el techo histórico de 75.
+    # ------------------------------------------------------------------
+
+    if any(
+
+        isinstance(
+            brecha,
+            dict
+        )
+        and
+        brecha.get(
+            "tipo"
+        )
+        ==
+        "HERRAMIENTA_ESPECIFICA"
+
+        for brecha
+        in brechas
+
+    ):
+
+        score = min(
+            score,
+            75
+        )
+
+
+    return limitar(
+        score,
+        0,
+        100
+    )
+
+def evaluar_oferta_contextual_base_v01883(
+    oferta,
+    candidato,
+    perfil
+):
+
+    # ------------------------------------------------------------------
+    # 1. MOTOR BASE
+    #
+    # Aquí ya se ejecutan TODOS los guardrails históricos:
+    #
+    #   cargo < 20  -> techo 35
+    #   cargo < 50  -> techo 55
+    #   herramienta específica crítica -> techo 75
+    #
+    # No los eliminamos ni los alteramos.
+    # ------------------------------------------------------------------
+
+    evaluacion = evaluar_oferta_base_v01882(
+        oferta,
+        candidato,
+        perfil
+    )
+
+
+    final_base = float(
+        evaluacion.get(
+            "final",
+            0
+        )
+        or
+        0
+    )
+
+
+    # ------------------------------------------------------------------
+    # 2. EXPERIENCIA CONTEXTUAL
+    # ------------------------------------------------------------------
+
+    detalle_contextual = evaluar_experiencia_contextual_v01880(
+        candidato,
+        oferta,
+        perfil
+    )
+
+
+    score_contextual = score_experiencia_contextual_v01882(
+        detalle_contextual,
+        oferta
+    )
+
+
+    ajuste_contextual = ajuste_experiencia_contextual_v01882(
+        score_contextual,
+        detalle_contextual,
+        evaluacion
+    )
+
+
+    # ------------------------------------------------------------------
+    # 3. AJUSTE ±8
+    #
+    # Este ajuste existe precisamente para reconocer situaciones donde
+    # la similitud nominal del cargo es baja pero la experiencia real
+    # demuestra funciones relevantes o transferibles.
+    #
+    # Por eso NO volvemos a aplicar después el guardrail nominal de cargo:
+    # hacerlo neutralizaría esta capa.
+    # ------------------------------------------------------------------
+
+    final_pre_post_guardrail = limitar(
+        final_base
+        +
+        ajuste_contextual,
+        0,
+        100
+    )
+
+
+    # ------------------------------------------------------------------
+    # 4. POST-GUARDRAIL
+    #
+    # Conservamos únicamente límites que la experiencia contextual
+    # no debería poder compensar por sí sola.
+    #
+    # Actualmente:
+    #
+    #   HERRAMIENTA_ESPECIFICA -> máximo 75
+    # ------------------------------------------------------------------
+
+    final_contextual = aplicar_guardrail_post_contexto_v01824(
+        final_pre_post_guardrail,
+        evaluacion.get(
+            "brechas",
+            []
+        )
+    )
+
+
+    # ------------------------------------------------------------------
+    # 5. TRAZABILIDAD
+    # ------------------------------------------------------------------
+
+    evaluacion[
+        "final_base"
+    ] = final_base
+
+
+    evaluacion[
+        "final_pre_post_guardrail"
+    ] = final_pre_post_guardrail
+
+
+    evaluacion[
+        "final"
+    ] = final_contextual
+
+
+    evaluacion[
+        "experiencia_contextual_score"
+    ] = score_contextual
+
+
+    evaluacion[
+        "experiencia_equivalente"
+    ] = detalle_contextual.get(
+        "equivalente",
+        0
+    )
+
+
+    evaluacion[
+        "experiencia_contextual_ajuste"
+    ] = ajuste_contextual
+
+
+    evaluacion[
+        "experiencia_contextual_limite"
+    ] = limite_contextual_por_cargo_v01882(
+        evaluacion
+    )
+
+
+    evaluacion[
+        "experiencia_contextual_razon"
+    ] = razon_experiencia_contextual_v01882(
+        detalle_contextual
+    )
+
+
+    evaluacion[
+        "experiencia_contextual_detalle"
+    ] = detalle_contextual
+
+
+    evaluacion[
+        "guardrail_base_aplicado"
+    ] = True
+
+
+    evaluacion[
+        "guardrail_cargo_reaplicado_post_contexto"
+    ] = False
+
+
+    evaluacion[
+        "guardrail_tecnico_post_contexto"
+    ] = any(
+
+        isinstance(
+            brecha,
+            dict
+        )
+        and
+        brecha.get(
+            "tipo"
+        )
+        ==
+        "HERRAMIENTA_ESPECIFICA"
+
+        for brecha
+        in evaluacion.get(
+            "brechas",
+            []
+        )
+    )
+
+
+    return evaluacion
+
+def evaluar_oferta(
+    oferta,
+    candidato,
+    perfil
+):
+
+    # ------------------------------------------------------------------
+    # V0.18.8.3-R1
+    #
+    # Antes de ejecutar cualquier cálculo:
+    #
+    # - eliminamos atributos personales sensibles del candidato
+    # - eliminamos atributos sensibles del perfil
+    #
+    # La oferta se mantiene sin sanitización destructiva porque contiene
+    # requisitos profesionales, pero los datos del candidato que podrían
+    # producir discriminación no entran al score.
+    # ------------------------------------------------------------------
+
+    candidato_score = sanitizar_para_score_v01883(
+        candidato
+    )
+
+
+    perfil_score = sanitizar_para_score_v01883(
+        perfil
+    )
+
+
+    evaluacion = evaluar_oferta_contextual_base_v01883(
+        oferta,
+        candidato_score,
+        perfil_score
+    )
+
+
+    # ------------------------------------------------------------------
+    # METADATOS DE TRANSPARENCIA / EQUIDAD
+    #
+    # No alteran matemáticas.
+    # ------------------------------------------------------------------
+
+    metadata = metadata_equidad_v01883()
+
+
+    evaluacion[
+        "equidad_activa"
+    ] = metadata[
+        "equidad_activa"
+    ]
+
+
+    evaluacion[
+        "atributos_fuera_score"
+    ] = metadata[
+        "atributos_fuera_score"
+    ]
+
+
+    evaluacion[
+        "score_significado"
+    ] = metadata[
+        "significado_score"
+    ]
+
+
+    evaluacion[
+        "score_no_es_probabilidad_contratacion"
+    ] = metadata[
+        "no_es_probabilidad_contratacion"
+    ]
+
+
+    evaluacion[
+        "ausencia_informacion_no_implica_incapacidad"
+    ] = metadata[
+        "ausencia_informacion_no_implica_incapacidad"
+    ]
+
+
+    evaluacion[
+        "principio_equidad"
+    ] = metadata[
+        "principio"
+    ]
+
+
+    evaluacion[
+        "comentario_equidad"
+    ] = comentario_equidad_v01883()
+
+
+    return evaluacion
 
 
 def crear_evento(
@@ -5427,9 +10057,2634 @@ def render_login():
 # 25. UI USUARIO
 # ======================================================================
 
+# ======================================================================
+# V0.18.8.4.2-R1
+# CONOCIMIENTOS CLAVE - PRESENTACIÓN COMPACTA
+# ======================================================================
+
+
+NOMBRES_NIVEL_V018842 = {
+
+    0:
+        "No detectado",
+
+    1:
+        "Básico",
+
+    2:
+        "Inicial",
+
+    3:
+        "Intermedio",
+
+    4:
+        "Avanzado",
+
+    5:
+        "Experto"
+}
+
+
+def nombre_nivel_v018842(
+    nivel,
+    no_detectado="No detectado"
+):
+
+    try:
+
+        nivel_int = int(
+            nivel
+        )
+
+
+    except Exception:
+
+        return no_detectado
+
+
+    if nivel_int <= 0:
+
+        return no_detectado
+
+
+    return NOMBRES_NIVEL_V018842.get(
+        nivel_int,
+        str(
+            nivel_int
+        )
+    )
+
+
+def habilidad_nombre_amigable_v018842(
+    nombre
+):
+
+    texto = str(
+        nombre
+        or
+        ""
+    ).strip()
+
+
+    if not texto:
+
+        return "Conocimiento"
+
+
+    mapa = {
+
+        "power bi":
+            "Power BI",
+
+        "powerbi":
+            "Power BI",
+
+        "sql":
+            "SQL",
+
+        "excel":
+            "Excel",
+
+        "python":
+            "Python",
+
+        "tableau":
+            "Tableau",
+
+        "sap":
+            "SAP",
+
+        "crm":
+            "CRM",
+
+        "dax":
+            "DAX",
+
+        "power query":
+            "Power Query",
+
+        "visualizacion de datos":
+            "Visualización de Datos",
+
+        "visualización de datos":
+            "Visualización de Datos",
+
+        "analisis de datos":
+            "Análisis de Datos",
+
+        "análisis de datos":
+            "Análisis de Datos"
+    }
+
+
+    clave = texto.lower()
+
+
+    if clave in mapa:
+
+        return mapa[
+            clave
+        ]
+
+
+    return " ".join(
+        palabra.upper()
+        if palabra.lower()
+        in {
+            "sql",
+            "crm",
+            "erp",
+            "etl",
+            "api",
+            "bi"
+        }
+        else palabra.capitalize()
+
+        for palabra
+        in texto.split()
+    )
+
+
+def _valor_match_v018842(
+    match,
+    claves,
+    default=None
+):
+
+    if not isinstance(
+        match,
+        dict
+    ):
+
+        return default
+
+
+    for clave in claves:
+
+        if clave in match:
+
+            return match[
+                clave
+            ]
+
+
+    return default
+
+
+def _habilidad_requerida_nombre_v018842(
+    match
+):
+
+    requerida = _valor_match_v018842(
+        match,
+        [
+            "requerida",
+            "habilidad_requerida",
+            "skill_requerida",
+            "nombre"
+        ],
+        ""
+    )
+
+
+    if isinstance(
+        requerida,
+        dict
+    ):
+
+        requerida = (
+            requerida.get(
+                "nombre"
+            )
+            or
+            requerida.get(
+                "habilidad"
+            )
+            or
+            requerida.get(
+                "skill"
+            )
+            or
+            ""
+        )
+
+
+    return habilidad_nombre_amigable_v018842(
+        requerida
+    )
+
+
+def _nivel_requerido_v018842(
+    match
+):
+
+    valor = _valor_match_v018842(
+        match,
+        [
+            "nivel_requerido",
+            "requerido_nivel"
+        ],
+        None
+    )
+
+
+    if valor is not None:
+
+        try:
+
+            return int(
+                valor
+            )
+
+
+        except Exception:
+
+            pass
+
+
+    requerida = _valor_match_v018842(
+        match,
+        [
+            "requerida",
+            "habilidad_requerida"
+        ],
+        {}
+    )
+
+
+    if isinstance(
+        requerida,
+        dict
+    ):
+
+        for clave in [
+            "nivel",
+            "nivel_requerido"
+        ]:
+
+            if requerida.get(
+                clave
+            ) is not None:
+
+                try:
+
+                    return int(
+                        requerida[
+                            clave
+                        ]
+                    )
+
+
+                except Exception:
+
+                    pass
+
+
+    return None
+
+
+def _nivel_explicito_requerido_v018842(
+    match
+):
+
+    # ------------------------------------------------------------------
+    # La prioridad es metadata explícita.
+    #
+    # Esto evita mentir al usuario:
+    #
+    # si el parser asignó nivel 3 por defecto pero la oferta jamás dijo
+    # "intermedio", mostramos:
+    #
+    #   Nivel solicitado no especificado
+    #
+    # y NO:
+    #
+    #   Nivel solicitado: Intermedio
+    # ------------------------------------------------------------------
+
+    directo = _valor_match_v018842(
+        match,
+        [
+            "nivel_explicito",
+            "nivel_requerido_explicito"
+        ],
+        None
+    )
+
+
+    if directo is not None:
+
+        return bool(
+            directo
+        )
+
+
+    requerida = _valor_match_v018842(
+        match,
+        [
+            "requerida",
+            "habilidad_requerida"
+        ],
+        {}
+    )
+
+
+    if isinstance(
+        requerida,
+        dict
+    ):
+
+        if "nivel_explicito" in requerida:
+
+            return bool(
+                requerida[
+                    "nivel_explicito"
+                ]
+            )
+
+
+        # --------------------------------------------------------------
+        # Compatibilidad con parsers antiguos.
+        #
+        # Si existe texto original y contiene un descriptor de nivel,
+        # podemos inferir que fue explícito.
+        # --------------------------------------------------------------
+
+        texto = str(
+            requerida.get(
+                "texto",
+                ""
+            )
+            or
+            requerida.get(
+                "origen",
+                ""
+            )
+            or
+            ""
+        ).lower()
+
+
+        patrones = [
+
+            "basico",
+            "básico",
+
+            "inicial",
+
+            "intermedio",
+
+            "avanzado",
+
+            "experto",
+
+            "senior",
+            "sénior",
+
+            "junior",
+            "júnior"
+        ]
+
+
+        if texto:
+
+            return any(
+                patron
+                in texto
+                for patron
+                in patrones
+            )
+
+
+    # --------------------------------------------------------------
+    # Sin evidencia de que el nivel haya sido escrito por la empresa,
+    # asumimos NO explícito a nivel de presentación.
+    # --------------------------------------------------------------
+
+    return False
+
+
+def _nivel_candidato_v018842(
+    match
+):
+
+    valor = _valor_match_v018842(
+        match,
+        [
+            "nivel_candidato",
+            "candidata_nivel",
+            "nivel_detectado"
+        ],
+        None
+    )
+
+
+    if valor is not None:
+
+        try:
+
+            return int(
+                valor
+            )
+
+
+        except Exception:
+
+            pass
+
+
+    candidata = _valor_match_v018842(
+        match,
+        [
+            "candidata",
+            "habilidad_candidata"
+        ],
+        {}
+    )
+
+
+    if isinstance(
+        candidata,
+        dict
+    ):
+
+        for clave in [
+            "nivel",
+            "nivel_candidato"
+        ]:
+
+            if candidata.get(
+                clave
+            ) is not None:
+
+                try:
+
+                    return int(
+                        candidata[
+                            clave
+                        ]
+                    )
+
+
+                except Exception:
+
+                    pass
+
+
+    return 0
+
+
+def estado_conocimiento_v018842(
+    match
+):
+
+    nivel_candidato = _nivel_candidato_v018842(
+        match
+    )
+
+
+    nivel_requerido = _nivel_requerido_v018842(
+        match
+    )
+
+
+    nivel_explicito = _nivel_explicito_requerido_v018842(
+        match
+    )
+
+
+    if nivel_candidato <= 0:
+
+        return {
+
+            "codigo":
+                "NO_DETECTADO",
+
+            "icono":
+                "⚠",
+
+            "texto":
+                "Nivel no detectado",
+
+            "tono":
+                "warning",
+
+            "nivel_candidato":
+                nivel_candidato,
+
+            "nivel_requerido":
+                nivel_requerido,
+
+            "nivel_explicito":
+                nivel_explicito
+        }
+
+
+    # ------------------------------------------------------------------
+    # Si la oferta no especificó nivel, no podemos afirmar que el
+    # candidato esté por debajo de un nivel que la empresa no publicó.
+    # ------------------------------------------------------------------
+
+    if not nivel_explicito:
+
+        return {
+
+            "codigo":
+                "NIVEL_NO_ESPECIFICADO",
+
+            "icono":
+                "⚠",
+
+            "texto":
+                "Nivel solicitado no especificado",
+
+            "tono":
+                "warning",
+
+            "nivel_candidato":
+                nivel_candidato,
+
+            "nivel_requerido":
+                nivel_requerido,
+
+            "nivel_explicito":
+                False
+        }
+
+
+    if (
+        nivel_requerido is not None
+        and
+        nivel_candidato >= nivel_requerido
+    ):
+
+        return {
+
+            "codigo":
+                "CUMPLE",
+
+            "icono":
+                "✓",
+
+            "texto":
+                "Cumple",
+
+            "tono":
+                "success",
+
+            "nivel_candidato":
+                nivel_candidato,
+
+            "nivel_requerido":
+                nivel_requerido,
+
+            "nivel_explicito":
+                True
+        }
+
+
+    return {
+
+        "codigo":
+            "NIVEL_INFERIOR",
+
+        "icono":
+            "⚠",
+
+        "texto":
+            "Nivel inferior al solicitado",
+
+        "tono":
+            "warning",
+
+        "nivel_candidato":
+            nivel_candidato,
+
+        "nivel_requerido":
+            nivel_requerido,
+
+        "nivel_explicito":
+            nivel_explicito
+    }
+
+
+def preparar_conocimiento_v018842(
+    match,
+    requerida=None,
+    candidato=None,
+    oferta=None
+):
+
+    match = (
+        match
+        if isinstance(
+            match,
+            dict
+        )
+        else {}
+    )
+
+
+    requerida = str(
+        requerida
+        or
+        match.get(
+            "_requerida"
+        )
+        or
+        match.get(
+            "requerida"
+        )
+        or
+        match.get(
+            "nombre"
+        )
+        or
+        ""
+    ).strip()
+
+
+    nombre_candidata = match.get(
+        "candidato"
+    )
+
+
+    # ------------------------------------------------------------------
+    # NIVEL REAL DEL CANDIDATO
+    #
+    # matching_habilidades()["nivel"] NO es necesariamente el nivel
+    # 1-5 original. Es la salida de cumplimiento_nivel().
+    #
+    # Para mostrar "Tu nivel" debemos volver a candidato["habilidades"].
+    # ------------------------------------------------------------------
+
+    nivel_candidato = 0
+
+
+    if (
+        nombre_candidata
+        and
+        isinstance(
+            candidato,
+            dict
+        )
+    ):
+
+        habilidades_candidato = candidato.get(
+            "habilidades",
+            {}
+        )
+
+
+        if isinstance(
+            habilidades_candidato,
+            dict
+        ):
+
+            valor = habilidades_candidato.get(
+                nombre_candidata
+            )
+
+
+            if isinstance(
+                valor,
+                dict
+            ):
+
+                valor = (
+                    valor.get(
+                        "nivel"
+                    )
+                    or
+                    valor.get(
+                        "nivel_detectado"
+                    )
+                    or
+                    0
+                )
+
+
+            try:
+
+                nivel_candidato = int(
+                    valor
+                    or
+                    0
+                )
+
+
+            except Exception:
+
+                nivel_candidato = 0
+
+
+    # ------------------------------------------------------------------
+    # NIVEL REQUERIDO
+    # ------------------------------------------------------------------
+
+    try:
+
+        nivel_requerido = int(
+            match.get(
+                "nivel_requerido",
+                0
+            )
+            or
+            0
+        )
+
+
+    except Exception:
+
+        nivel_requerido = 0
+
+
+    # ------------------------------------------------------------------
+    # ¿FUE EXPLÍCITO?
+    #
+    # Se consulta directamente la estructura de la oferta porque
+    # matching_habilidades() no transporta esa metadata.
+    # ------------------------------------------------------------------
+
+    nivel_explicito = False
+
+
+    if (
+        requerida
+        and
+        isinstance(
+            oferta,
+            dict
+        )
+    ):
+
+        habilidades_oferta = oferta.get(
+            "habilidades",
+            {}
+        )
+
+
+        if isinstance(
+            habilidades_oferta,
+            dict
+        ):
+
+            datos_oferta = habilidades_oferta.get(
+                requerida,
+                {}
+            )
+
+
+            if isinstance(
+                datos_oferta,
+                dict
+            ):
+
+                nivel_explicito = bool(
+                    datos_oferta.get(
+                        "nivel_explicito",
+                        False
+                    )
+                )
+
+
+    # ------------------------------------------------------------------
+    # ESTADO
+    # ------------------------------------------------------------------
+
+    if not nombre_candidata or nivel_candidato <= 0:
+
+        estado = "Nivel no detectado"
+
+        codigo_estado = "NO_DETECTADO"
+
+        icono = "⚠"
+
+        tono = "warning"
+
+
+    elif not nivel_explicito:
+
+        estado = "Nivel solicitado no especificado"
+
+        codigo_estado = "NIVEL_NO_ESPECIFICADO"
+
+        icono = "⚠"
+
+        tono = "warning"
+
+
+    elif nivel_candidato >= nivel_requerido:
+
+        estado = "Cumple"
+
+        codigo_estado = "CUMPLE"
+
+        icono = "✓"
+
+        tono = "success"
+
+
+    else:
+
+        estado = "Nivel inferior al solicitado"
+
+        codigo_estado = "NIVEL_INFERIOR"
+
+        icono = "⚠"
+
+        tono = "warning"
+
+
+    nivel_solicitado = (
+
+        nombre_nivel_v018842(
+            nivel_requerido,
+            "No especificado"
+        )
+
+        if nivel_explicito
+
+        else
+        "No especificado"
+    )
+
+
+    return {
+
+        "nombre":
+            habilidad_nombre_amigable_v018842(
+                requerida
+            ),
+
+        "habilidad_candidata":
+            nombre_candidata,
+
+        "nivel_solicitado":
+            nivel_solicitado,
+
+        "nivel_propio":
+            nombre_nivel_v018842(
+                nivel_candidato
+            ),
+
+        "estado":
+            estado,
+
+        "estado_codigo":
+            codigo_estado,
+
+        "estado_icono":
+            icono,
+
+        "tono":
+            tono
+    }
+
+
+def render_conocimientos_compactos_v018841(
+    evaluacion,
+    candidato=None,
+    oferta=None
+):
+
+    matches = (
+        evaluacion.get(
+            "matches",
+            {}
+        )
+        if isinstance(
+            evaluacion,
+            dict
+        )
+        else {}
+    )
+
+
+    st.markdown(
+        "### Conocimientos clave"
+    )
+
+
+    if not matches:
+
+        st.caption(
+            "No encontramos conocimientos específicos suficientes "
+            "para comparar en esta oferta."
+        )
+
+        return
+
+
+    # ------------------------------------------------------------------
+    # ESTRUCTURA REAL:
+    #
+    # matches = {
+    #     "Power BI": {...},
+    #     "SQL": {...}
+    # }
+    #
+    # La clave ES el conocimiento requerido.
+    # ------------------------------------------------------------------
+
+    if isinstance(
+        matches,
+        dict
+    ):
+
+        iterable = matches.items()
+
+
+    elif isinstance(
+        matches,
+        list
+    ):
+
+        iterable = [
+
+            (
+                str(
+                    indice + 1
+                ),
+                match
+            )
+
+            for indice, match
+            in enumerate(
+                matches
+            )
+        ]
+
+
+    else:
+
+        st.caption(
+            "No fue posible interpretar los conocimientos de esta oferta."
+        )
+
+        return
+
+
+    for requerida, match in iterable:
+
+        conocimiento = preparar_conocimiento_v018842(
+            match,
+            requerida=requerida,
+            candidato=candidato,
+            oferta=oferta
+        )
+
+
+        nombre = conocimiento[
+            "nombre"
+        ]
+
+
+        propio = conocimiento[
+            "nivel_propio"
+        ]
+
+
+        solicitado = conocimiento[
+            "nivel_solicitado"
+        ]
+
+
+        estado = conocimiento[
+            "estado"
+        ]
+
+
+        icono = conocimiento[
+            "estado_icono"
+        ]
+
+
+        codigo_estado = conocimiento[
+            "estado_codigo"
+        ]
+
+
+        with st.container(
+            border=True
+        ):
+
+            st.markdown(
+                f"**{nombre}**"
+            )
+
+
+            col_a, col_b = st.columns(
+                2
+            )
+
+
+            with col_a:
+
+                st.caption(
+                    "Nivel solicitado"
+                )
+
+
+                if solicitado == "No especificado":
+
+                    st.markdown(
+                        "⚠ **No especificado**"
+                    )
+
+
+                else:
+
+                    st.markdown(
+                        f"**{solicitado}**"
+                    )
+
+
+            with col_b:
+
+                st.caption(
+                    "Tu nivel"
+                )
+
+                st.markdown(
+                    f"**{propio}**"
+                )
+
+
+            if codigo_estado == "CUMPLE":
+
+                st.success(
+                    f"{icono} {estado}"
+                )
+
+
+            elif codigo_estado == "NIVEL_NO_ESPECIFICADO":
+
+                st.warning(
+                    "⚠ Nivel solicitado no especificado"
+                )
+
+
+            else:
+
+                st.warning(
+                    f"{icono} {estado}"
+                )
+
+# ======================================================================
+# V0.18.9.0.2-R1
+# UX HUMANA PROFESIONAL
+# ======================================================================
+
+
+CIERRE_INSTITUCIONAL_V018902 = (
+    "Este análisis utiliza la información disponible en tu CV y en la oferta. "
+    "Es una orientación para tomar mejores decisiones y no garantiza avanzar "
+    "en un proceso de selección."
+)
+
+
+def detalle_cargo_v01871(
+    oferta
+):
+
+    if not isinstance(
+        oferta,
+        dict
+    ):
+
+        return (
+            "La publicación contiene información limitada sobre "
+            "las funciones del cargo."
+        )
+
+
+    descripcion = str(
+        oferta.get(
+            "descripcion",
+            ""
+        )
+        or
+        oferta.get(
+            "texto",
+            ""
+        )
+        or
+        ""
+    ).strip()
+
+
+    if descripcion:
+
+        return descripcion
+
+
+    cargo = str(
+        oferta.get(
+            "cargo",
+            "esta oportunidad"
+        )
+    ).strip()
+
+
+    return (
+        f"La oferta está orientada al cargo de {cargo}. "
+        "Revisa las condiciones y requisitos publicados para "
+        "evaluar si se ajustan a lo que buscas."
+    )
+
+
+def por_que_encaja_v01871(
+    evaluacion,
+    candidato=None,
+    oferta=None
+):
+
+    if not isinstance(
+        evaluacion,
+        dict
+    ):
+
+        return (
+            "No contamos con información suficiente para explicar "
+            "la alineación."
+        )
+
+
+    razones = []
+
+
+    experiencia = evaluacion.get(
+        "experiencia_contextual_detalle",
+        {}
+    )
+
+
+    if experiencia.get(
+        "directa",
+        0
+    ) > 0:
+
+        razones.append(
+            "tienes experiencia directamente relacionada"
+        )
+
+
+    elif experiencia.get(
+        "funcional_relevante",
+        0
+    ) > 0:
+
+        razones.append(
+            "parte de tu experiencia tiene funciones relevantes para este cargo"
+        )
+
+
+    elif experiencia.get(
+        "transferible_alto_valor",
+        0
+    ) > 0:
+
+        razones.append(
+            "tu trayectoria aporta habilidades altamente transferibles"
+        )
+
+
+    cumplimiento = float(
+        evaluacion.get(
+            "cumplimiento",
+            0
+        )
+        or
+        0
+    )
+
+
+    if cumplimiento >= 75:
+
+        razones.append(
+            "presentas una buena coincidencia en conocimientos clave"
+        )
+
+
+    cargo = float(
+        evaluacion.get(
+            "cargo",
+            0
+        )
+        or
+        0
+    )
+
+
+    if cargo >= 70:
+
+        razones.append(
+            "el cargo está bien alineado con tu objetivo profesional"
+        )
+
+
+    if not razones:
+
+        return (
+            "Hay algunos elementos de tu perfil que pueden ser útiles "
+            "para esta oportunidad, aunque también existen aspectos "
+            "que conviene revisar antes de postular."
+        )
+
+
+    if len(
+        razones
+    ) == 1:
+
+        return (
+            "Esta oportunidad puede tener sentido para ti porque "
+            +
+            razones[
+                0
+            ]
+            +
+            "."
+        )
+
+
+    return (
+        "Esta oportunidad puede tener sentido para ti porque "
+        +
+        ", ".join(
+            razones[
+                :-1
+            ]
+        )
+        +
+        " y "
+        +
+        razones[
+            -1
+        ]
+        +
+        "."
+    )
+
+
+def porque_encaja_flexible_v018902(
+    *args,
+    **kwargs
+):
+
+    # Compatibilidad flexible con llamadas anteriores.
+    evaluacion = kwargs.get(
+        "evaluacion"
+    )
+
+
+    candidato = kwargs.get(
+        "candidato"
+    )
+
+
+    oferta = kwargs.get(
+        "oferta"
+    )
+
+
+    if evaluacion is None and args:
+
+        for argumento in args:
+
+            if (
+                isinstance(
+                    argumento,
+                    dict
+                )
+                and
+                (
+                    "final"
+                    in argumento
+                    or
+                    "cumplimiento"
+                    in argumento
+                    or
+                    "brechas"
+                    in argumento
+                )
+            ):
+
+                evaluacion = argumento
+
+                break
+
+
+    if candidato is None:
+
+        for argumento in args:
+
+            if (
+                isinstance(
+                    argumento,
+                    dict
+                )
+                and
+                "habilidades"
+                in argumento
+                and
+                "cargo_deseado"
+                in argumento
+            ):
+
+                candidato = argumento
+
+                break
+
+
+    if oferta is None:
+
+        for argumento in args:
+
+            if (
+                isinstance(
+                    argumento,
+                    dict
+                )
+                and
+                "cargo"
+                in argumento
+                and
+                "sueldo"
+                in argumento
+            ):
+
+                oferta = argumento
+
+                break
+
+
+    return por_que_encaja_v01871(
+        evaluacion
+        or
+        {},
+        candidato,
+        oferta
+    )
+
+
+def etiqueta_alineacion_v018901(
+    porcentaje
+):
+
+    porcentaje = float(
+        porcentaje
+        or
+        0
+    )
+
+
+    if porcentaje >= 80:
+
+        return (
+            "Alineación alta",
+            "Tu perfil presenta una coincidencia sólida con esta oportunidad."
+        )
+
+
+    if porcentaje >= 55:
+
+        return (
+            "Alineación moderada",
+            "Existen varios elementos favorables, junto con algunos aspectos por revisar."
+        )
+
+
+    return (
+        "Oportunidad para explorar",
+        "La coincidencia actual es menor, pero eso no significa que la oportunidad deba descartarse automáticamente."
+    )
+
+
+def render_banner_humano_v018901(
+    evaluacion
+):
+
+    final = float(
+        evaluacion.get(
+            "final",
+            0
+        )
+        or
+        0
+    )
+
+
+    titulo, mensaje = etiqueta_alineacion_v018901(
+        final
+    )
+
+
+    if final >= 80:
+
+        st.success(
+            f"### {titulo}\n\n{mensaje}"
+        )
+
+
+    elif final >= 55:
+
+        st.info(
+            f"### {titulo}\n\n{mensaje}"
+        )
+
+
+    else:
+
+        st.warning(
+            f"### {titulo}\n\n{mensaje}"
+        )
+
+
+def render_resumen_simple_v018901(
+    evaluacion
+):
+
+    final = float(
+        evaluacion.get(
+            "final",
+            0
+        )
+        or
+        0
+    )
+
+
+    etiqueta, _ = etiqueta_alineacion_v018901(
+        final
+    )
+
+
+    st.markdown(
+        "### Lectura rápida"
+    )
+
+
+    c1, c2 = st.columns(
+        2
+    )
+
+
+    with c1:
+
+        st.metric(
+            "Compatibilidad",
+            f"{final:.0f}%"
+        )
+
+
+    with c2:
+
+        st.metric(
+            "Lectura",
+            etiqueta
+        )
+
+
+def render_experiencia_simple_v018901(
+    evaluacion
+):
+
+    detalle = evaluacion.get(
+        "experiencia_contextual_detalle",
+        {}
+    )
+
+
+    if not isinstance(
+        detalle,
+        dict
+    ):
+
+        return
+
+
+    st.markdown(
+        "### Experiencia"
+    )
+
+
+    total = float(
+        detalle.get(
+            "total",
+            0
+        )
+        or
+        0
+    )
+
+
+    directa = float(
+        detalle.get(
+            "directa",
+            0
+        )
+        or
+        0
+    )
+
+
+    funcional = float(
+        detalle.get(
+            "funcional_relevante",
+            0
+        )
+        or
+        0
+    )
+
+
+    relacionada = float(
+        detalle.get(
+            "relacionada",
+            0
+        )
+        or
+        0
+    )
+
+
+    transferible_alto = float(
+        detalle.get(
+            "transferible_alto_valor",
+            0
+        )
+        or
+        0
+    )
+
+
+    if total <= 0:
+
+        st.caption(
+            "No contamos con suficiente experiencia estructurada para "
+            "hacer una lectura contextual."
+        )
+
+        return
+
+
+    st.write(
+        f"**Experiencia total registrada:** {total:g} años"
+    )
+
+
+    if directa > 0:
+
+        st.success(
+            f"✓ {directa:g} años de experiencia directa relacionada."
+        )
+
+
+    elif funcional > 0:
+
+        st.info(
+            f"✓ {funcional:g} años de experiencia funcionalmente relevante."
+        )
+
+
+    elif relacionada > 0:
+
+        st.info(
+            f"✓ {relacionada:g} años de experiencia relacionada."
+        )
+
+
+    elif transferible_alto > 0:
+
+        st.info(
+            f"✓ {transferible_alto:g} años con experiencia transferible de alto valor."
+        )
+
+
+    else:
+
+        st.caption(
+            "Tu trayectoria aporta experiencia profesional, aunque no "
+            "detectamos una relación fuerte con este cargo."
+        )
+
+
+def render_condiciones_v018901(
+    oferta,
+    candidato
+):
+
+    st.markdown(
+        "### Condiciones"
+    )
+
+
+    filas = []
+
+
+    modalidad_oferta = str(
+        oferta.get(
+            "modalidad",
+            ""
+        )
+        or
+        ""
+    ).strip()
+
+
+    ciudad_oferta = str(
+        oferta.get(
+            "ciudad",
+            ""
+        )
+        or
+        ""
+    ).strip()
+
+
+    sueldo = oferta.get(
+        "sueldo"
+    )
+
+
+    if modalidad_oferta:
+
+        filas.append(
+            (
+                "Modalidad",
+                modalidad_oferta.capitalize()
+            )
+        )
+
+
+    if ciudad_oferta:
+
+        filas.append(
+            (
+                "Ubicación",
+                ciudad_oferta
+            )
+        )
+
+
+    if sueldo:
+
+        try:
+
+            filas.append(
+                (
+                    "Renta publicada",
+                    f"${int(sueldo):,}".replace(
+                        ",",
+                        "."
+                    )
+                )
+            )
+
+
+        except Exception:
+
+            filas.append(
+                (
+                    "Renta publicada",
+                    str(
+                        sueldo
+                    )
+                )
+            )
+
+
+    if not filas:
+
+        st.caption(
+            "La oferta no publica suficientes condiciones para comparar."
+        )
+
+        return
+
+
+    for etiqueta, valor in filas:
+
+        st.write(
+            f"**{etiqueta}:** {valor}"
+        )
+
+
+def fortalezas_v018901(
+    evaluacion
+):
+
+    fortalezas = []
+
+
+    cumplimiento = float(
+        evaluacion.get(
+            "cumplimiento",
+            0
+        )
+        or
+        0
+    )
+
+
+    cargo = float(
+        evaluacion.get(
+            "cargo",
+            0
+        )
+        or
+        0
+    )
+
+
+    detalle = evaluacion.get(
+        "experiencia_contextual_detalle",
+        {}
+    )
+
+
+    if cumplimiento >= 70:
+
+        fortalezas.append(
+            "Buena coincidencia en conocimientos y herramientas."
+        )
+
+
+    if cargo >= 70:
+
+        fortalezas.append(
+            "El cargo tiene una relación clara con tu objetivo profesional."
+        )
+
+
+    if detalle.get(
+        "directa",
+        0
+    ) > 0:
+
+        fortalezas.append(
+            "Cuentas con experiencia directamente relacionada."
+        )
+
+
+    elif detalle.get(
+        "funcional_relevante",
+        0
+    ) > 0:
+
+        fortalezas.append(
+            "Tu experiencia contiene funciones relevantes para el cargo."
+        )
+
+
+    elif detalle.get(
+        "transferible_alto_valor",
+        0
+    ) > 0:
+
+        fortalezas.append(
+            "Tienes habilidades transferibles de alto valor."
+        )
+
+
+    return fortalezas
+
+
+def render_fortalezas_v018901(
+    evaluacion
+):
+
+    fortalezas = fortalezas_v018901(
+        evaluacion
+    )
+
+
+    if not fortalezas:
+
+        return
+
+
+    st.markdown(
+        "### Fortalezas detectadas"
+    )
+
+
+    for fortaleza in fortalezas:
+
+        st.success(
+            f"✓ {fortaleza}"
+        )
+
+
+def aspectos_considerar_v018901(
+    evaluacion
+):
+
+    aspectos = []
+
+
+    brechas = evaluacion.get(
+        "brechas",
+        []
+    )
+
+
+    if brechas:
+
+        aspectos.append(
+            "Existen conocimientos o niveles que conviene revisar antes de postular."
+        )
+
+
+    detalle = evaluacion.get(
+        "experiencia_contextual_detalle",
+        {}
+    )
+
+
+    if (
+        detalle.get(
+            "directa",
+            0
+        )
+        <=
+        0
+        and
+        detalle.get(
+            "funcional_relevante",
+            0
+        )
+        <=
+        0
+    ):
+
+        aspectos.append(
+            "No detectamos experiencia directa o funcionalmente equivalente suficiente."
+        )
+
+
+    cargo = float(
+        evaluacion.get(
+            "cargo",
+            0
+        )
+        or
+        0
+    )
+
+
+    if cargo < 50:
+
+        aspectos.append(
+            "El cargo se aleja de tu objetivo profesional declarado."
+        )
+
+
+    return aspectos
+
+
+def consejo_postulacion_v018901(
+    evaluacion
+):
+
+    final = float(
+        evaluacion.get(
+            "final",
+            0
+        )
+        or
+        0
+    )
+
+
+    if final >= 80:
+
+        return (
+            "La oportunidad parece bien alineada con tu perfil. "
+            "Si las condiciones te interesan, tiene sentido considerar la postulación."
+        )
+
+
+    if final >= 55:
+
+        return (
+            "La oportunidad presenta una alineación razonable. "
+            "Antes de postular, revisa especialmente los requisitos donde "
+            "tu nivel aparece por debajo de lo solicitado."
+        )
+
+
+    return (
+        "La alineación es menor, pero no necesariamente debes descartarla. "
+        "Revisa si las brechas corresponden a requisitos realmente esenciales "
+        "y si tu experiencia transferible puede compensarlas."
+    )
+
+
+def render_evaluacion_amplia_v018901(
+    evaluacion
+):
+
+    st.markdown(
+        "### Evaluación profesional"
+    )
+
+
+    favorables = fortalezas_v018901(
+        evaluacion
+    )
+
+
+    aspectos = aspectos_considerar_v018901(
+        evaluacion
+    )
+
+
+    st.markdown(
+        "**Puntos favorables**"
+    )
+
+
+    if favorables:
+
+        for item in favorables:
+
+            st.write(
+                f"• {item}"
+            )
+
+
+    else:
+
+        st.caption(
+            "No detectamos fortalezas suficientes para destacar con la "
+            "información actualmente disponible."
+        )
+
+
+    st.markdown(
+        "**Aspectos a considerar**"
+    )
+
+
+    if aspectos:
+
+        for item in aspectos:
+
+            st.write(
+                f"• {item}"
+            )
+
+
+    else:
+
+        st.write(
+            "• No detectamos alertas relevantes con la información disponible."
+        )
+
+
+    final = float(
+        evaluacion.get(
+            "final",
+            0
+        )
+        or
+        0
+    )
+
+
+    etiqueta, mensaje = etiqueta_alineacion_v018901(
+        final
+    )
+
+
+    st.markdown(
+        "**Lectura general**"
+    )
+
+
+    st.write(
+        f"{etiqueta}. {mensaje}"
+    )
+
+
+    st.markdown(
+        "**Consejo de postulación**"
+    )
+
+
+    st.write(
+        consejo_postulacion_v018901(
+            evaluacion
+        )
+    )
+
+
+def render_transparencia_v018901(
+    evaluacion
+):
+
+    with st.expander(
+        "Cómo interpretamos este porcentaje"
+    ):
+
+        st.write(
+            "El porcentaje representa el nivel de alineación detectado "
+            "entre tu información profesional y los requisitos de la oferta."
+        )
+
+
+        st.write(
+            "Puede considerar tu CV, información confirmada en tu perfil, "
+            "preferencias, experiencia contextual y requisitos publicados."
+        )
+
+
+        st.write(
+            "No representa una probabilidad de contratación ni una evaluación "
+            "de tu valor profesional."
+        )
+
+
+        st.write(
+            "La ausencia de información en tu CV o perfil no significa "
+            "automáticamente que no poseas una determinada capacidad."
+        )
+
+
+def render_analisis_profesional_v01877(
+    oferta,
+    candidato,
+    evaluacion
+):
+
+    final = float(
+        evaluacion.get(
+            "final",
+            0
+        )
+        or
+        0
+    )
+
+
+    st.markdown(
+        "## Tu análisis de esta oportunidad"
+    )
+
+
+    st.caption(
+        "Usamos la información disponible para ayudarte a entender "
+        "qué tan bien se alinea esta oferta con tu perfil."
+    )
+
+
+    render_banner_humano_v018901(
+        evaluacion
+    )
+
+
+    st.markdown(
+        "### Sobre el cargo"
+    )
+
+
+    st.write(
+        detalle_cargo_v01871(
+            oferta
+        )
+    )
+
+
+    st.markdown(
+        "### Por qué encaja contigo"
+    )
+
+
+    st.write(
+        porque_encaja_flexible_v018902(
+            evaluacion=evaluacion,
+            candidato=candidato,
+            oferta=oferta
+        )
+    )
+
+
+    render_resumen_simple_v018901(
+        evaluacion
+    )
+
+
+    render_experiencia_simple_v018901(
+        evaluacion
+    )
+
+
+    render_conocimientos_compactos_v018841(
+        evaluacion,
+        candidato,
+        oferta
+    )
+
+
+    render_condiciones_v018901(
+        oferta,
+        candidato
+    )
+
+
+    render_fortalezas_v018901(
+        evaluacion
+    )
+
+
+    render_evaluacion_amplia_v018901(
+        evaluacion
+    )
+
+
+    render_transparencia_v018901(
+        evaluacion
+    )
+
+
+    st.divider()
+
+
+    st.caption(
+        CIERRE_INSTITUCIONAL_V018902
+    )
+
+# ======================================================================
+# V0.18.9.0.3-R1.1
+# CAPA VISUAL INTERMEDIA DE RECOMENDACIONES
+# ======================================================================
+
+
+def escapar_v018903(
+    valor
+):
+
+    import html
+
+    return html.escape(
+        str(
+            valor
+            or
+            ""
+        )
+    )
+
+
+def capitalizar_v018903(
+    valor
+):
+
+    texto = str(
+        valor
+        or
+        ""
+    ).strip()
+
+
+    if not texto:
+
+        return "No informado"
+
+
+    return texto[:1].upper() + texto[1:]
+
+
+def formato_dinero_v018903(
+    valor
+):
+
+    try:
+
+        numero = int(
+            float(
+                valor
+                or
+                0
+            )
+        )
+
+
+    except Exception:
+
+        numero = 0
+
+
+    if numero <= 0:
+
+        return "No informado"
+
+
+    return (
+        "$"
+        +
+        f"{numero:,}".replace(
+            ",",
+            "."
+        )
+    )
+
+
+def html_v018903(
+    contenido
+):
+
+    import textwrap
+
+
+    contenido_limpio = textwrap.dedent(
+        str(
+            contenido
+            or
+            ""
+        )
+    ).strip()
+
+
+    if not contenido_limpio:
+
+        return
+
+
+    st.html(
+        contenido_limpio
+    )
+
+
+def detalle_tarjeta_v018903(
+    oferta
+):
+
+    try:
+
+        detalle = detalle_cargo_v01871(
+            oferta
+        )
+
+
+        if detalle:
+
+            return detalle
+
+
+    except Exception:
+
+        pass
+
+
+    cargo = str(
+        oferta.get(
+            "cargo",
+            "esta oportunidad"
+        )
+        or
+        "esta oportunidad"
+    ).strip()
+
+
+    descripcion = str(
+        oferta.get(
+            "descripcion",
+            ""
+        )
+        or
+        ""
+    ).strip()
+
+
+    if descripcion:
+
+        descripcion = re.sub(
+            r"\s+",
+            " ",
+            descripcion
+        ).strip()
+
+
+        if len(
+            descripcion
+        ) > 380:
+
+            descripcion = (
+                descripcion[:377].rstrip()
+                +
+                "..."
+            )
+
+
+        return descripcion
+
+
+    return (
+        f"La publicación corresponde a una oportunidad para {cargo}. "
+        "Revisa sus requisitos y condiciones antes de postular."
+    )
+
+
+def encaje_tarjeta_v018903(
+    oferta,
+    evaluacion,
+    candidato
+):
+
+    try:
+
+        return porque_encaja_flexible_v018902(
+            oferta,
+            evaluacion,
+            candidato
+        )
+
+
+    except Exception:
+
+        try:
+
+            return por_que_encaja_v01871(
+                evaluacion
+            )
+
+
+        except Exception:
+
+            return (
+                "Detectamos elementos de tu trayectoria que pueden "
+                "ser útiles para esta oportunidad."
+            )
+
+
+def fortalezas_tarjeta_v018903(
+    evaluacion
+):
+
+    fortalezas = []
+
+
+    # --------------------------------------------------------------
+    # MATCHES DE CONOCIMIENTOS
+    # --------------------------------------------------------------
+
+    matches = evaluacion.get(
+        "matches",
+        {}
+    )
+
+
+    if isinstance(
+        matches,
+        dict
+    ):
+
+        for requerida, datos in matches.items():
+
+            if not isinstance(
+                datos,
+                dict
+            ):
+
+                continue
+
+
+            candidata = datos.get(
+                "candidato"
+            )
+
+
+            try:
+
+                similitud = float(
+                    datos.get(
+                        "similitud",
+                        0
+                    )
+                    or
+                    0
+                )
+
+
+            except Exception:
+
+                similitud = 0
+
+
+            if (
+                candidata
+                and
+                similitud >= 70
+            ):
+
+                nombre = str(
+                    requerida
+                ).strip()
+
+
+                if (
+                    nombre
+                    and
+                    nombre
+                    not in fortalezas
+                ):
+
+                    fortalezas.append(
+                        nombre
+                    )
+
+
+    # --------------------------------------------------------------
+    # EXPERIENCIA CONTEXTUAL
+    # --------------------------------------------------------------
+
+    detalle = evaluacion.get(
+        "experiencia_contextual_detalle",
+        {}
+    )
+
+
+    if isinstance(
+        detalle,
+        dict
+    ):
+
+        directa = float(
+            detalle.get(
+                "directa",
+                0
+            )
+            or
+            0
+        )
+
+
+        funcional = float(
+            detalle.get(
+                "funcional_relevante",
+                0
+            )
+            or
+            0
+        )
+
+
+        relacionada = float(
+            detalle.get(
+                "relacionada",
+                0
+            )
+            or
+            0
+        )
+
+
+        transferible = float(
+            detalle.get(
+                "transferible_alto_valor",
+                0
+            )
+            or
+            0
+        )
+
+
+        if directa > 0:
+
+            fortalezas.append(
+                "Experiencia directa"
+            )
+
+
+        elif funcional > 0:
+
+            fortalezas.append(
+                "Experiencia funcional relevante"
+            )
+
+
+        elif relacionada > 0:
+
+            fortalezas.append(
+                "Experiencia relacionada"
+            )
+
+
+        elif transferible > 0:
+
+            fortalezas.append(
+                "Experiencia transferible de alto valor"
+            )
+
+
+    # --------------------------------------------------------------
+    # DEDUPLICAR
+    # --------------------------------------------------------------
+
+    salida = []
+
+
+    for item in fortalezas:
+
+        if item not in salida:
+
+            salida.append(
+                item
+            )
+
+
+    return salida[:5]
+
+
+def render_encabezado_humano_v018903(
+    candidato
+):
+
+    nombre = ""
+
+
+    if isinstance(
+        candidato,
+        dict
+    ):
+
+        nombre = str(
+            candidato.get(
+                "nombre",
+                ""
+            )
+            or
+            ""
+        ).strip()
+
+
+    primer_nombre = (
+        nombre.split()[0]
+        if nombre
+        else ""
+    )
+
+
+    titulo = (
+        f"Hola, {primer_nombre} 👋"
+        if primer_nombre
+        else
+        "Tus oportunidades"
+    )
+
+
+    html_v018903(
+        f"""
+        <div class="v018903-welcome">
+
+            <div class="v018903-welcome-title">
+                {escapar_v018903(titulo)}
+            </div>
+
+            <div class="v018903-welcome-subtitle">
+                Revisamos las oportunidades disponibles usando tu
+                experiencia, habilidades y preferencias profesionales
+                para ayudarte a decidir dónde vale la pena poner atención.
+            </div>
+
+            <div class="v018903-sync">
+                ✓ Tu información está sincronizada y lista para continuar.
+            </div>
+
+        </div>
+        """
+    )
+
+
+def aplicar_estilos_tarjetas_v018903():
+
+    import textwrap
+
+
+    css = '\n        <style>\n\n        /* ==========================================================\n           CONTENEDOR PRINCIPAL\n        ========================================================== */\n\n        .block-container {\n            max-width: 1080px;\n            padding-top: 1.8rem;\n            padding-bottom: 4rem;\n        }\n\n\n        /* ==========================================================\n           ENCABEZADO HUMANO\n        ========================================================== */\n\n        .v018903-welcome {\n            margin: 0.1rem 0 1.20rem 0;\n        }\n\n        .v018903-welcome-title {\n            font-size: 1.95rem;\n            line-height: 1.15;\n            font-weight: 760;\n            letter-spacing: -0.025em;\n            margin-bottom: 0.30rem;\n        }\n\n        .v018903-welcome-subtitle {\n            font-size: 0.95rem;\n            line-height: 1.52;\n            opacity: 0.72;\n            max-width: 780px;\n        }\n\n        .v018903-sync {\n            display: inline-flex;\n            align-items: center;\n            margin-top: 0.55rem;\n            font-size: 0.81rem;\n            opacity: 0.58;\n        }\n\n\n        /* ==========================================================\n           TARJETA\n        ========================================================== */\n\n        .v01871-company {\n            font-size: 0.88rem;\n            font-weight: 720;\n            line-height: 1.2;\n            opacity: 0.62;\n            margin-bottom: 0.34rem;\n        }\n\n        .v01871-header-row {\n            display: flex;\n            align-items: flex-start;\n            justify-content: space-between;\n            gap: 1.5rem;\n            width: 100%;\n        }\n\n        .v01871-role {\n            font-size: 1.43rem;\n            line-height: 1.15;\n            font-weight: 770;\n            letter-spacing: -0.022em;\n        }\n\n\n        /* ==========================================================\n           COMPATIBILIDAD\n        ========================================================== */\n\n        .v01871-score {\n            flex: 0 0 auto;\n            text-align: right;\n            min-width: 94px;\n        }\n\n        .v01871-score-number {\n            display: block;\n            font-size: 1.74rem;\n            line-height: 1;\n            font-weight: 790;\n        }\n\n        .v01871-score-label {\n            display: block;\n            font-size: 0.71rem;\n            margin-top: 0.22rem;\n            opacity: 0.56;\n        }\n\n\n        /* ==========================================================\n           CHIPS\n        ========================================================== */\n\n        .v01871-meta {\n            display: flex;\n            flex-wrap: wrap;\n            gap: 0.42rem;\n            margin-top: 0.85rem;\n        }\n\n        .v01871-chip {\n            display: inline-flex;\n            align-items: center;\n            padding: 0.29rem 0.64rem;\n            border-radius: 999px;\n            border: 1px solid rgba(128,128,128,0.22);\n            background: rgba(128,128,128,0.055);\n            font-size: 0.80rem;\n            line-height: 1.2;\n            font-weight: 560;\n        }\n\n\n        /* ==========================================================\n           SECCIONES\n        ========================================================== */\n\n        .v01871-section {\n            margin-top: 1.08rem;\n        }\n\n        .v01871-role-summary {\n            margin-top: 1.18rem;\n        }\n\n        .v01871-section-label {\n            font-size: 0.75rem;\n            line-height: 1.25;\n            font-weight: 760;\n            text-transform: uppercase;\n            letter-spacing: 0.045em;\n            opacity: 0.57;\n            margin-bottom: 0.33rem;\n        }\n\n        .v01871-body {\n            font-size: 0.93rem;\n            line-height: 1.55;\n            opacity: 0.91;\n        }\n\n\n        /* ==========================================================\n           FORTALEZAS\n        ========================================================== */\n\n        .v01871-strengths {\n            display: flex;\n            flex-wrap: wrap;\n            gap: 0.42rem;\n        }\n\n        .v01871-strength {\n            display: inline-flex;\n            align-items: center;\n            padding: 0.29rem 0.65rem;\n            border-radius: 999px;\n            border: 1px solid rgba(70,160,95,0.28);\n            background: rgba(70,160,95,0.08);\n            font-size: 0.80rem;\n            line-height: 1.2;\n            font-weight: 620;\n        }\n\n\n        /* ==========================================================\n           DIVISOR\n        ========================================================== */\n\n        .v01871-divider {\n            width: 100%;\n            height: 1px;\n            background: rgba(128,128,128,0.18);\n            margin: 1.15rem 0 0.95rem 0;\n        }\n\n\n        /* ==========================================================\n           STREAMLIT\n        ========================================================== */\n\n        div[data-testid="stVerticalBlockBorderWrapper"] {\n            border-radius: 15px;\n        }\n\n        .stButton > button {\n            border-radius: 9px;\n            min-height: 2.55rem;\n            font-weight: 650;\n        }\n\n        div[data-testid="stPopover"] button {\n            border-radius: 9px;\n            min-height: 2.55rem;\n            font-weight: 650;\n        }\n\n        div[data-testid="stAlert"] {\n            border-radius: 10px;\n        }\n\n        hr {\n            margin-top: 1.10rem !important;\n            margin-bottom: 1.10rem !important;\n            opacity: 0.20;\n        }\n\n        </style>\n<style>\n\n/* ==================================================================\n   V0.18.9.0.3-R1.4\n   FIX DE ESPACIO SUPERIOR\n   ================================================================== */\n\n/*\n   Streamlit mantiene una barra superior fija.\n   El padding anterior de 1.8rem no era suficiente y el primer\n   encabezado quedaba físicamente debajo del header.\n*/\n\ndiv[data-testid="stAppViewContainer"] .block-container {\n    padding-top: 4.75rem !important;\n}\n\n\n/*\n   Pequeña separación adicional del saludo respecto del borde.\n*/\n\n.v018903-welcome {\n    margin-top: 0.35rem !important;\n}\n\n\n/*\n   Evitar que un ancla/elemento inicial pueda desplazarse\n   debajo del header.\n*/\n\n.v018903-welcome-title {\n    scroll-margin-top: 5rem;\n}\n\n</style>'
+
+
+    css = textwrap.dedent(
+        css
+    ).strip()
+
+
+    if not css:
+
+        return
+
+
+    st.html(
+        css
+    )
+
 def render_usuario(
     user_id
 ):
+
+    aplicar_estilos_tarjetas_v018903()
 
     usuario = obtener_usuario(
         user_id
@@ -5456,30 +12711,15 @@ def render_usuario(
     )
 
 
-    historial = cargar_interacciones(
+    perfil_confirmado = cargar_perfil_confirmado_v01880(
         user_id
     )
 
 
-    st.title(
-        "💼 Portal Inteligente de Empleo"
+    historial = cargar_interacciones(
+        user_id
     )
 
-
-    st.caption(
-        f"{usuario['nombre_visible']} "
-        f"· @{usuario['username']}"
-    )
-
-
-    st.success(
-        "☁️ Datos cargados desde Supabase"
-    )
-
-
-    # --------------------------------------------------------------
-    # SIDEBAR
-    # --------------------------------------------------------------
 
     with st.sidebar:
 
@@ -5677,7 +12917,8 @@ def render_usuario(
     perfil = construir_perfil(
         cv,
         preferencias,
-        historial
+        historial,
+        perfil_confirmado
     )
 
 
@@ -5692,8 +12933,13 @@ def render_usuario(
     )
 
 
-    m1, m2, m3, m4 = st.columns(
-        4
+    render_encabezado_humano_v018903(
+        candidato
+    )
+
+
+    m1, m2 = st.columns(
+        2
     )
 
 
@@ -5706,24 +12952,8 @@ def render_usuario(
 
 
     m2.metric(
-        "Descartadas",
-        len(
-            descartadas
-        )
-    )
-
-
-    m3.metric(
         "Confianza CV",
         f"{perfil['cv']['confianza']:.0f}%"
-    )
-
-
-    m4.metric(
-        "Interacciones",
-        len(
-            historial
-        )
     )
 
 
@@ -5774,130 +13004,233 @@ def render_usuario(
                 border=True
             ):
 
-                izquierda, derecha = st.columns(
-                    [
-                        4,
-                        1
-                    ]
-                )
+                # ----------------------------------------------------------
+                # DATOS
+                # ----------------------------------------------------------
 
-
-                with izquierda:
-
-                    st.markdown(
-                        f"### {posicion}. "
-                        f"{oferta['cargo']} · "
-                        f"{nombre}"
-                    )
-
-
-                    st.write(
-                        f"📍 {oferta['ciudad']} · "
-                        f"🏢 {oferta['modalidad']} · "
-                        f"💰 ${oferta['sueldo']:,}"
-                    )
-
-
-                with derecha:
-
-                    st.metric(
-                        "Match",
-                        f"{evaluacion['final']:.1f}%"
-                    )
-
-
-                c1, c2, c3, c4 = st.columns(
-                    4
-                )
-
-
-                c1.metric(
-                    "Técnico",
-                    f"{evaluacion['cumplimiento']:.0f}%"
-                )
-
-
-                c2.metric(
-                    "Potencial",
-                    f"{evaluacion['potencial']:.0f}%"
-                )
-
-
-                c3.metric(
-                    "Cargo",
-                    evaluacion[
-                        "cargo_clasificacion"
-                    ]
-                )
-
-
-                c4.metric(
-                    "Conducta",
-                    f"{evaluacion['conducta']:+.2f}"
-                )
-
-
-                if evaluacion[
-                    "brechas"
-                ]:
-
-                    with st.expander(
-                        "⚠️ Brechas"
-                    ):
-
-                        for brecha in evaluacion[
-                            "brechas"
-                        ]:
-
-                            st.write(
-                                f"• {brecha['habilidad']} "
-                                f"— {brecha['tipo']}"
-                            )
-
-
-                motivo = st.selectbox(
-                    "Motivo de rechazo",
-                    [
+                cargo_v = str(
+                    oferta.get(
                         "cargo",
-                        "modalidad",
-                        "sueldo",
-                        "ubicacion"
-                    ],
-                    key=f"motivo_{nombre}"
+                        "Cargo no informado"
+                    )
+                    or
+                    "Cargo no informado"
                 )
 
+
+                ciudad_v = capitalizar_v018903(
+                    oferta.get(
+                        "ciudad",
+                        "No informada"
+                    )
+                )
+
+
+                modalidad_v = capitalizar_v018903(
+                    oferta.get(
+                        "modalidad",
+                        "No informada"
+                    )
+                )
+
+
+                sueldo_v = formato_dinero_v018903(
+                    oferta.get(
+                        "sueldo",
+                        0
+                    )
+                )
+
+
+                compatibilidad_v = float(
+                    evaluacion.get(
+                        "final",
+                        0
+                    )
+                    or
+                    0
+                )
+
+
+                detalle_v = detalle_tarjeta_v018903(
+                    oferta
+                )
+
+
+                encaje_v = encaje_tarjeta_v018903(
+                    oferta,
+                    evaluacion,
+                    candidato
+                )
+
+
+                fortalezas_v = fortalezas_tarjeta_v018903(
+                    evaluacion
+                )
+
+
+                # ----------------------------------------------------------
+                # CABECERA VISUAL
+                # ----------------------------------------------------------
+
+                html_v018903(
+                    f"""
+                    <div class="v01871-company">
+                        {escapar_v018903(nombre)}
+                    </div>
+
+                    <div class="v01871-header-row">
+
+                        <div>
+                            <div class="v01871-role">
+                                {escapar_v018903(cargo_v)}
+                            </div>
+                        </div>
+
+                        <div class="v01871-score">
+
+                            <span class="v01871-score-number">
+                                {compatibilidad_v:.0f}%
+                            </span>
+
+                            <span class="v01871-score-label">
+                                Compatibilidad
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                    <div class="v01871-meta">
+
+                        <span class="v01871-chip">
+                            📍 {escapar_v018903(ciudad_v)}
+                        </span>
+
+                        <span class="v01871-chip">
+                            💼 {escapar_v018903(modalidad_v)}
+                        </span>
+
+                        <span class="v01871-chip">
+                            💰 {escapar_v018903(sueldo_v)}
+                        </span>
+
+                    </div>
+                    """
+                )
+
+
+                # ----------------------------------------------------------
+                # SOBRE EL CARGO
+                # ----------------------------------------------------------
+
+                html_v018903(
+                    f"""
+                    <div class="v01871-section v01871-role-summary">
+
+                        <div class="v01871-section-label">
+                            Sobre el cargo
+                        </div>
+
+                        <div class="v01871-body">
+                            {escapar_v018903(detalle_v)}
+                        </div>
+
+                    </div>
+                    """
+                )
+
+
+                # ----------------------------------------------------------
+                # POR QUÉ ENCAJA
+                # ----------------------------------------------------------
+
+                html_v018903(
+                    f"""
+                    <div class="v01871-section">
+
+                        <div class="v01871-section-label">
+                            Por qué encaja contigo
+                        </div>
+
+                        <div class="v01871-body">
+                            {escapar_v018903(encaje_v)}
+                        </div>
+
+                    </div>
+                    """
+                )
+
+
+                # ----------------------------------------------------------
+                # FORTALEZAS
+                # ----------------------------------------------------------
+
+                if fortalezas_v:
+
+                    fortalezas_html = "".join(
+
+                        (
+                            '<span class="v01871-strength">'
+                            +
+                            escapar_v018903(
+                                fortaleza
+                            )
+                            +
+                            "</span>"
+                        )
+
+                        for fortaleza
+                        in fortalezas_v
+                    )
+
+
+                    html_v018903(
+                        f"""
+                        <div class="v01871-section">
+
+                            <div class="v01871-section-label">
+                                Fortalezas para esta oferta
+                            </div>
+
+                            <div class="v01871-strengths">
+                                {fortalezas_html}
+                            </div>
+
+                        </div>
+                        """
+                    )
+
+
+                html_v018903(
+                    '<div class="v01871-divider"></div>'
+                )
+
+
+                # ----------------------------------------------------------
+                # ACCIONES
+                # ----------------------------------------------------------
 
                 b1, b2, b3 = st.columns(
-                    3
+                    [
+                        1.25,
+                        1.0,
+                        1.15
+                    ]
                 )
 
+
+                # ----------------------------------------------------------
+                # POSTULAR
+                # ----------------------------------------------------------
 
                 with b1:
 
                     if st.button(
-                        "⭐ Guardar",
-                        key=f"guardar_{nombre}",
-                        use_container_width=True
-                    ):
-
-                        guardar_interaccion(
-                            user_id,
-                            crear_evento(
-                                "guardar",
-                                nombre,
-                                oferta
-                            )
-                        )
-
-                        st.rerun()
-
-
-                with b2:
-
-                    if st.button(
                         "🚀 Postular",
-                        key=f"postular_{nombre}",
-                        use_container_width=True
+                        key=f"postular_v018903_{posicion}_{nombre}",
+                        use_container_width=True,
+                        type="primary"
                     ):
 
                         guardar_interaccion(
@@ -5912,26 +13245,111 @@ def render_usuario(
                         st.rerun()
 
 
-                with b3:
+                # ----------------------------------------------------------
+                # DESCARTAR
+                # ----------------------------------------------------------
 
-                    if st.button(
-                        "✖ Rechazar",
-                        key=f"rechazar_{nombre}",
+                with b2:
+
+                    with st.popover(
+                        "✕ Descartar",
                         use_container_width=True
                     ):
 
-                        guardar_interaccion(
-                            user_id,
-                            crear_evento(
-                                "rechazar",
-                                nombre,
-                                oferta,
-                                motivo
-                            )
+                        motivo = st.selectbox(
+                            "¿Por qué no te interesa?",
+                            [
+                                "cargo",
+                                "modalidad",
+                                "sueldo",
+                                "ubicacion"
+                            ],
+                            key=f"motivo_v018903_{posicion}_{nombre}"
                         )
 
-                        st.rerun()
 
+                        if st.button(
+                            "Confirmar descarte",
+                            key=f"rechazar_v018903_{posicion}_{nombre}",
+                            use_container_width=True
+                        ):
+
+                            guardar_interaccion(
+                                user_id,
+                                crear_evento(
+                                    "rechazar",
+                                    nombre,
+                                    oferta,
+                                    motivo
+                                )
+                            )
+
+                            st.rerun()
+
+
+                # ----------------------------------------------------------
+                # VER ANÁLISIS
+                # ----------------------------------------------------------
+
+                with b3:
+
+                    clave_analisis = (
+                        f"mostrar_analisis_v018903_{posicion}_{nombre}"
+                    )
+
+
+                    if clave_analisis not in st.session_state:
+
+                        st.session_state[
+                            clave_analisis
+                        ] = False
+
+
+                    texto_boton_analisis = (
+                        "🔎 Ocultar análisis"
+                        if st.session_state[
+                            clave_analisis
+                        ]
+                        else
+                        "🔎 Ver análisis"
+                    )
+
+
+                    if st.button(
+                        texto_boton_analisis,
+                        key=f"ver_analisis_v018903_{posicion}_{nombre}",
+                        use_container_width=True
+                    ):
+
+                        st.session_state[
+                            clave_analisis
+                        ] = not st.session_state[
+                            clave_analisis
+                        ]
+
+
+                # ----------------------------------------------------------
+                # ANÁLISIS DETALLADO
+                # ----------------------------------------------------------
+
+                if st.session_state.get(
+                    clave_analisis,
+                    False
+                ):
+
+                    st.divider()
+
+
+                    render_analisis_profesional_v01877(
+                        oferta,
+                        candidato,
+                        evaluacion
+                    )
+
+
+        # --------------------------------------------------------------
+        # OFERTAS DESCARTADAS
+        # --------------------------------------------------------------
 
         if descartadas:
 
@@ -5939,10 +13357,11 @@ def render_usuario(
                 "🚫 Ofertas descartadas"
             ):
 
-                for nombre, motivo in descartadas:
+                for nombre_descartada, motivo_descartada in descartadas:
 
                     st.write(
-                        f"**{nombre}** — {motivo}"
+                        f"**{nombre_descartada}** — "
+                        f"{motivo_descartada}"
                     )
 
 
