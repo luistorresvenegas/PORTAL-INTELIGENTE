@@ -14500,6 +14500,151 @@ def aplicar_estilos_tarjetas_v018903():
 
 
 INTEGRACION_UI_RECOMENDACIONES_VERSION_V01814 = "R1.4-B"
+
+
+# ==================================================================================================
+# R1.4-C · ESTADO PERSISTENTE DE OFERTAS
+# ==================================================================================================
+
+INTEGRACION_ACCIONES_OFERTA_VERSION_V01814C = "R1.4-C"
+
+
+def ofertas_descartadas_v01814c(
+    historial
+):
+
+    resultado = set()
+
+    for evento in (
+        historial
+        if isinstance(
+            historial,
+            list
+        )
+        else []
+    ):
+
+        if not isinstance(
+            evento,
+            dict
+        ):
+            continue
+
+        accion = normalizar(
+            evento.get(
+                "accion"
+            )
+        )
+
+        if accion != "rechazar":
+            continue
+
+        nombre = normalizar(
+            evento.get(
+                "oferta_nombre"
+            )
+        )
+
+        if nombre:
+            resultado.add(
+                nombre
+            )
+
+    return resultado
+
+
+def ofertas_guardadas_v01814c(
+    historial
+):
+
+    resultado = set()
+
+    for evento in (
+        historial
+        if isinstance(
+            historial,
+            list
+        )
+        else []
+    ):
+
+        if not isinstance(
+            evento,
+            dict
+        ):
+            continue
+
+        accion = normalizar(
+            evento.get(
+                "accion"
+            )
+        )
+
+        if accion != "guardar":
+            continue
+
+        nombre = normalizar(
+            evento.get(
+                "oferta_nombre"
+            )
+        )
+
+        if nombre:
+            resultado.add(
+                nombre
+            )
+
+    return resultado
+
+
+def filtrar_descartadas_v01814c(
+    ranking,
+    historial
+):
+
+    descartadas = ofertas_descartadas_v01814c(
+        historial
+    )
+
+    if not descartadas:
+        return list(
+            ranking
+            if isinstance(
+                ranking,
+                list
+            )
+            else []
+        )
+
+    return [
+        elemento
+
+        for elemento
+        in (
+            ranking
+            if isinstance(
+                ranking,
+                list
+            )
+            else []
+        )
+
+        if normalizar(
+            (
+                elemento.get(
+                    "nombre",
+                    ""
+                )
+                if isinstance(
+                    elemento,
+                    dict
+                )
+                else ""
+            )
+        )
+        not in descartadas
+    ]
+
 def render_usuario(
     user_id
 ):
@@ -14751,6 +14896,31 @@ def render_usuario(
         candidato,
         perfil
     )
+
+
+    # ------------------------------------------------------------------
+    # R1.4-C · ESTADO PERSISTENTE DE ACCIONES
+    # ------------------------------------------------------------------
+
+    ofertas_descartadas_usuario_v01814c = (
+        ofertas_descartadas_v01814c(
+            historial
+        )
+    )
+
+
+    ofertas_guardadas_usuario_v01814c = (
+        ofertas_guardadas_v01814c(
+            historial
+        )
+    )
+
+
+    ranking = filtrar_descartadas_v01814c(
+        ranking,
+        historial
+    )
+
 
 
     render_encabezado_humano_v018903(
@@ -15124,8 +15294,9 @@ def render_usuario(
                     # ACCIONES
                     # ----------------------------------------------------------
 
-                    b1, b2, b3 = st.columns(
+                    b1, b2, b3, b4 = st.columns(
                         [
+                            1.05,
                             1.25,
                             1.0,
                             1.15
@@ -15158,11 +15329,54 @@ def render_usuario(
                             st.rerun()
 
 
+
+
+                    # ----------------------------------------------------------
+                    # GUARDAR OFERTA
+                    # ----------------------------------------------------------
+
+                    with b2:
+
+                        oferta_ya_guardada_v01814c = (
+                            normalizar(
+                                nombre
+                            )
+                            in
+                            ofertas_guardadas_usuario_v01814c
+                        )
+
+
+                        texto_guardar_v01814c = (
+                            "✓ Oferta guardada"
+                            if oferta_ya_guardada_v01814c
+                            else
+                            "🔖 Guardar oferta"
+                        )
+
+
+                        if st.button(
+                            texto_guardar_v01814c,
+                            key=f"guardar_v01814c_{posicion}_{nombre}",
+                            use_container_width=True,
+                            disabled=oferta_ya_guardada_v01814c
+                        ):
+
+                            guardar_interaccion(
+                                user_id,
+                                crear_evento(
+                                    "guardar",
+                                    nombre,
+                                    oferta
+                                )
+                            )
+
+                            st.rerun()
+
                     # ----------------------------------------------------------
                     # DESCARTAR
                     # ----------------------------------------------------------
 
-                    with b2:
+                    with b3:
 
                         with st.popover(
                             "✕ Descartar",
@@ -15204,7 +15418,7 @@ def render_usuario(
                     # VER ANÁLISIS
                     # ----------------------------------------------------------
 
-                    with b3:
+                    with b4:
 
                         clave_analisis = (
                             f"mostrar_analisis_v018903_{posicion}_{nombre}"
@@ -15509,8 +15723,9 @@ def render_usuario(
                     # ACCIONES
                     # ----------------------------------------------------------
 
-                    b1, b2, b3 = st.columns(
+                    b1, b2, b3, b4 = st.columns(
                         [
+                            1.05,
                             1.25,
                             1.0,
                             1.15
@@ -15543,11 +15758,54 @@ def render_usuario(
                             st.rerun()
 
 
+
+
+                    # ----------------------------------------------------------
+                    # GUARDAR OFERTA
+                    # ----------------------------------------------------------
+
+                    with b2:
+
+                        oferta_ya_guardada_v01814c = (
+                            normalizar(
+                                nombre
+                            )
+                            in
+                            ofertas_guardadas_usuario_v01814c
+                        )
+
+
+                        texto_guardar_v01814c = (
+                            "✓ Oferta guardada"
+                            if oferta_ya_guardada_v01814c
+                            else
+                            "🔖 Guardar oferta"
+                        )
+
+
+                        if st.button(
+                            texto_guardar_v01814c,
+                            key=f"guardar_v01814c_{posicion}_{nombre}",
+                            use_container_width=True,
+                            disabled=oferta_ya_guardada_v01814c
+                        ):
+
+                            guardar_interaccion(
+                                user_id,
+                                crear_evento(
+                                    "guardar",
+                                    nombre,
+                                    oferta
+                                )
+                            )
+
+                            st.rerun()
+
                     # ----------------------------------------------------------
                     # DESCARTAR
                     # ----------------------------------------------------------
 
-                    with b2:
+                    with b3:
 
                         with st.popover(
                             "✕ Descartar",
@@ -15589,7 +15847,7 @@ def render_usuario(
                     # VER ANÁLISIS
                     # ----------------------------------------------------------
 
-                    with b3:
+                    with b4:
 
                         clave_analisis = (
                             f"mostrar_analisis_v018903_{posicion}_{nombre}"
